@@ -30,16 +30,28 @@ jobs:
       ZAI_AI_BASE_URL: ${{ secrets.ZAI_AI_BASE_URL }}
       ZAI_AI_MODELS: ${{ secrets.ZAI_AI_MODELS }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: pnpm/action-setup@v4
         with:
           version: 9
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          missing=0
+          for secret_name in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY AI_CASE_CRON_USER_ID; do
+            if [ -z "${!secret_name}" ]; then
+              echo "::error::${secret_name} is not configured."
+              missing=1
+            fi
+          done
+          exit "$missing"
 
       - run: pnpm install --frozen-lockfile
 
