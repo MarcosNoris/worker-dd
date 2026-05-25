@@ -67,17 +67,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          for cycle in 1 2 3 4 5 6; do
-            echo "Starting create-case cycle ${cycle}/6"
+          for cycle in 1 2 3 4 5; do
+            echo "Starting create-case cycle ${cycle}/5"
             pnpm worker:create-case
 
             echo "Waiting 5 minutes before recovery"
             sleep 300
 
-            echo "Starting recover-cases cycle ${cycle}/6"
+            echo "Starting recover-cases cycle ${cycle}/5"
             pnpm worker:recover-cases
 
-            if [ "$cycle" -lt 6 ]; then
+            if [ "$cycle" -lt 5 ]; then
               echo "Waiting 5 minutes before next create-case cycle"
               sleep 300
             fi
