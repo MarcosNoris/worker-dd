@@ -1,0 +1,4 @@
+interface:
+  display_name: "Detective Module README"
+  short_description: "Document module README requirements"
+  default_prompt: "Use $detective-module-readme when creating or changing modules in detective-department-api."

@@ -1,0 +1,48 @@
+name: Recover AI Cases
+
+on:
+  schedule:
+    - cron: '*/25 * * * *'
+  workflow_dispatch:
+
+jobs:
+  recover-ai-cases:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      AI_CASE_CRON_USER_ID: ${{ secrets.AI_CASE_CRON_USER_ID }}
+      AI_PROVIDER_ORDER: ${{ secrets.AI_PROVIDER_ORDER }}
+      AI_PROVIDER_TIMEOUT_MS: ${{ secrets.AI_PROVIDER_TIMEOUT_MS }}
+      AI_PROVIDER_COOLDOWN_SECONDS: ${{ secrets.AI_PROVIDER_COOLDOWN_SECONDS }}
+      GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY }}
+      GOOGLE_GENAI_MODELS: ${{ secrets.GOOGLE_GENAI_MODELS }}
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+      NVIDIA_AI_BASE_URL: ${{ secrets.NVIDIA_AI_BASE_URL }}
+      NVIDIA_AI_MODELS: ${{ secrets.NVIDIA_AI_MODELS }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      CEREBRAS_AI_BASE_URL: ${{ secrets.CEREBRAS_AI_BASE_URL }}
+      CEREBRAS_AI_MODELS: ${{ secrets.CEREBRAS_AI_MODELS }}
+      COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+      COHERE_AI_BASE_URL: ${{ secrets.COHERE_AI_BASE_URL }}
+      COHERE_AI_MODELS: ${{ secrets.COHERE_AI_MODELS }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      ZAI_AI_BASE_URL: ${{ secrets.ZAI_AI_BASE_URL }}
+      ZAI_AI_MODELS: ${{ secrets.ZAI_AI_MODELS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: pnpm worker:recover-cases
