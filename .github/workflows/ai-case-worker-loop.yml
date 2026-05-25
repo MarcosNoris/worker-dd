@@ -1,13 +1,18 @@
-name: Create AI Case
+name: AI Case Worker Loop
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '7 * * * *'
   workflow_dispatch:
 
+concurrency:
+  group: ai-case-worker-loop
+  cancel-in-progress: false
+
 jobs:
-  create-ai-case:
+  ai-case-worker-loop:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -57,4 +62,23 @@ jobs:
 
       - run: pnpm build
 
-      - run: pnpm worker:create-case
+      - name: Run AI case worker loop
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for cycle in 1 2 3 4 5 6; do
+            echo "Starting create-case cycle ${cycle}/6"
+            pnpm worker:create-case
+
+            echo "Waiting 5 minutes before recovery"
+            sleep 300
+
+            echo "Starting recover-cases cycle ${cycle}/6"
+            pnpm worker:recover-cases
+
+            if [ "$cycle" -lt 6 ]; then
+              echo "Waiting 5 minutes before next create-case cycle"
+              sleep 300
+            fi
+          done
