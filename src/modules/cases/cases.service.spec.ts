@@ -753,12 +753,52 @@ describe('CasesService', () => {
   it('returns the current admin case state and authoring progress', async () => {
     repository.findPlayabilitySnapshot.mockResolvedValue(
       createPlayabilitySnapshot({
-        actions: [createAction()],
+        actions: [
+          createAction(),
+          createAction({
+            actionType: 'interview',
+            id: 'interview-first-suspect-id',
+            requiredSkill: 'interrogation',
+            title: 'Entrevistar a Alicia Mora',
+          }),
+          createAction({
+            actionType: 'interview',
+            id: 'interview-second-suspect-id',
+            requiredSkill: 'interrogation',
+            title: 'Entrevistar a Bruno Rios',
+          }),
+        ],
         contradictionUnlockRules: [createContradictionUnlockRule()],
         evidenceUnlockRules: [createEvidenceUnlockRule()],
         requirements: [createRequirement()],
-        statementUnlockRules: [createStatementUnlockRule()],
-        suspects: [createSuspect(), createSuspect({ id: 'second-suspect-id' })],
+        statementUnlockRules: [
+          createStatementUnlockRule({
+            actionId: 'interview-first-suspect-id',
+          }),
+          createStatementUnlockRule({
+            actionId: 'interview-second-suspect-id',
+            id: 'second-statement-rule-id',
+            statementId: 'second-statement-id',
+          }),
+        ],
+        statements: [
+          createStatement({
+            speakerName: 'Alicia Mora',
+            suspectId: 'suspect-id',
+          }),
+          createStatement({
+            id: 'second-statement-id',
+            speakerName: 'Bruno Rios',
+            suspectId: 'second-suspect-id',
+          }),
+        ],
+        suspects: [
+          createSuspect(),
+          createSuspect({
+            id: 'second-suspect-id',
+            name: 'Bruno Rios',
+          }),
+        ],
       }),
     );
 
@@ -777,12 +817,12 @@ describe('CasesService', () => {
     );
     expect(response.progress).toEqual(
       expect.objectContaining({
-        actions: { count: 1, hasItems: true },
+        actions: { count: 3, hasItems: true },
         contradictions: { count: 1, hasItems: true },
         evidences: { count: 1, hasItems: true },
         solution: { count: 1, hasItems: true },
         solveRequirements: { count: 1, hasItems: true },
-        statements: { count: 1, hasItems: true },
+        statements: { count: 2, hasItems: true },
         suspects: { count: 2, hasItems: true },
       }),
     );
@@ -790,7 +830,7 @@ describe('CasesService', () => {
       actionPrerequisites: { count: 0, hasItems: false },
       contradictions: { count: 1, hasItems: true },
       evidences: { count: 1, hasItems: true },
-      statements: { count: 1, hasItems: true },
+      statements: { count: 2, hasItems: true },
     });
     expect(response.publishability.canPublish).toBe(true);
   });
@@ -815,15 +855,46 @@ describe('CasesService', () => {
     });
   });
 
-  it('does not request statement unlock rules for initially visible statements', async () => {
+  it('marks initially visible statements as blocking issues', async () => {
     repository.findPlayabilitySnapshot.mockResolvedValue(
       createPlayabilitySnapshot({
-        actions: [createAction()],
+        actions: [
+          createAction({
+            actionType: 'interview',
+            requiredSkill: 'interrogation',
+          }),
+          createAction({
+            actionType: 'interview',
+            id: 'second-interview-action-id',
+            requiredSkill: 'interrogation',
+            title: 'Entrevistar a Bruno Rios',
+          }),
+        ],
         contradictionUnlockRules: [createContradictionUnlockRule()],
         requirements: [createRequirement()],
+        statementUnlockRules: [
+          createStatementUnlockRule(),
+          createStatementUnlockRule({
+            actionId: 'second-interview-action-id',
+            id: 'second-statement-rule-id',
+            statementId: 'second-statement-id',
+          }),
+        ],
         statements: [
           createStatement({
             isInitiallyVisible: true,
+          }),
+          createStatement({
+            id: 'second-statement-id',
+            speakerName: 'Bruno Rios',
+            suspectId: 'second-suspect-id',
+          }),
+        ],
+        suspects: [
+          createSuspect(),
+          createSuspect({
+            id: 'second-suspect-id',
+            name: 'Bruno Rios',
           }),
         ],
       }),
@@ -831,8 +902,11 @@ describe('CasesService', () => {
 
     const response = await service.getAdminCaseState('case-id');
 
-    expect(response.currentProcess.code).not.toBe(
-      'configure_statement_unlock_rules',
+    expect(response.currentProcess.code).toBe('resolve_blocking_issues');
+    expect(response.publishability.blockingIssues).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('no puede ser inicialmente visible'),
+      ]),
     );
   });
 
@@ -880,6 +954,13 @@ describe('CasesService', () => {
             title: 'Inspeccionar escena',
           }),
           createAction({
+            actionType: 'interview',
+            id: 'action-interview',
+            isInitiallyAvailable: true,
+            requiredSkill: 'interrogation',
+            title: 'Entrevistar sospechoso',
+          }),
+          createAction({
             id: 'action-compare',
             isInitiallyAvailable: false,
             title: 'Contrastar versiones',
@@ -892,7 +973,7 @@ describe('CasesService', () => {
           createEvidenceUnlockRule({ actionId: 'action-inspect' }),
         ],
         statementUnlockRules: [
-          createStatementUnlockRule({ actionId: 'action-inspect' }),
+          createStatementUnlockRule({ actionId: 'action-interview' }),
         ],
       }),
     );
@@ -906,7 +987,13 @@ describe('CasesService', () => {
         id: 'action-inspect',
         isInitial: true,
         nodeType: 'action',
-        unlockIds: ['evidence-id', 'statement-id', 'contradiction-id'],
+        unlockIds: ['evidence-id', 'contradiction-id'],
+      }),
+      expect.objectContaining({
+        id: 'action-interview',
+        isInitial: true,
+        nodeType: 'action',
+        unlockIds: ['statement-id'],
       }),
       expect.objectContaining({
         id: 'action-compare',
@@ -936,7 +1023,7 @@ describe('CasesService', () => {
         }),
         expect.objectContaining({
           edgeType: 'unlock_statement',
-          fromId: 'action-inspect',
+          fromId: 'action-interview',
           toId: 'statement-id',
         }),
         expect.objectContaining({

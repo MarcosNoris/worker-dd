@@ -1,6 +1,7 @@
 import {
   GenerateAdminCaseBaseInput,
   GenerateCaseInvestigationGraphInput,
+  GenerateCaseStatementsInput,
   GenerateCaseSuspectsInput,
 } from '../types/ai.types';
 import { AiPromptFactory } from './ai-prompt.factory';
@@ -20,6 +21,7 @@ describe('AiPromptFactory', () => {
     const prompt = messages[1].content;
 
     expect(prompt).toContain('Genera exactamente 3 sospechosos');
+    expect(prompt).toContain('Idioma obligatorio');
     expect(prompt).toContain('La dificultad del caso es hard');
     expect(prompt).toContain('Nombres obligatorios de sospechosos');
     expect(prompt).toContain('Alicia Mora');
@@ -41,6 +43,21 @@ describe('AiPromptFactory', () => {
     expect(prompt).toContain('victimName debe ser exactamente uno');
   });
 
+  it('builds a case statements prompt that keeps statements locked', () => {
+    const messages = factory.buildCaseStatementsMessages(
+      createCaseStatementsInput(),
+    );
+
+    const prompt = messages[1].content;
+
+    expect(prompt).toContain('Cada statement debe incluir suspectId');
+    expect(prompt).toContain('No mezcles ingles');
+    expect(prompt).toContain('isInitiallyVisible debe ser siempre false');
+    expect(prompt).toContain(
+      'las declaraciones solo aparecen cuando el jugador completa la entrevista',
+    );
+  });
+
   it('builds a compact investigation graph prompt without raw persistence noise', () => {
     const messages = factory.buildCaseInvestigationGraphMessages(
       createInvestigationGraphInput(),
@@ -49,6 +66,7 @@ describe('AiPromptFactory', () => {
     const prompt = messages[1].content;
 
     expect(prompt).toContain('Dossier compacto');
+    expect(prompt).toContain('Conserva sin traducir solo IDs');
     expect(prompt).toContain('El JSON final debe tener entre 6 y 9 acciones');
     expect(prompt).toContain('No uses actionId ni tempId dentro de reglas');
     expect(prompt).toContain(
@@ -67,6 +85,13 @@ describe('AiPromptFactory', () => {
     );
     expect(prompt).toContain(
       'Cada accion interview debe entrevistar a un solo sospechoso',
+    );
+    expect(prompt).toContain('Ninguna declaracion puede tratarse como inicial');
+    expect(prompt).toContain(
+      'Cada declaracion debe tener una regla en statementUnlockRules apuntando a una accion interview',
+    );
+    expect(prompt).toContain(
+      'Todas las reglas de statementUnlockRules deben usar isGuaranteed true y successChance 1',
     );
     expect(prompt).toContain('minimumSkillLevel siempre debe ser un entero');
     expect(prompt).toContain('Nunca uses valores menores a 50');
@@ -113,12 +138,19 @@ describe('AiPromptFactory', () => {
     const prompt = messages[1].content;
 
     expect(prompt).toContain('intento de reparacion 1 de 2');
+    expect(prompt).toContain('si el contexto trae texto en ingles');
     expect(prompt).toContain('Devuelve el JSON completo corregido');
     expect(prompt).toContain('El JSON anterior tiene 1 acciones');
     expect(prompt).toContain('El JSON final debe respetar ese rango');
     expect(prompt).toContain('Prioriza agregar o corregir reglas de unlock');
     expect(prompt).toContain(
       'Cada sospechoso debe quedar cubierto por una accion inicial actionType="interview" propia',
+    );
+    expect(prompt).toContain(
+      'Todas las declaraciones deben permanecer bloqueadas al inicio',
+    );
+    expect(prompt).toContain(
+      'Las reglas de statementUnlockRules deben ser garantizadas',
     );
     expect(prompt).toContain('La accion no inicial request_autopsy');
     expect(prompt).toContain('"tempId":"request_autopsy"');
@@ -133,6 +165,39 @@ function createAdminCaseBaseInput(): GenerateAdminCaseBaseInput {
     forbiddenTitles: ['Caso repetido'],
     theme: 'archivo municipal',
     victimNamePool: ['Victor Ramos'],
+  };
+}
+
+function createCaseStatementsInput(): GenerateCaseStatementsInput {
+  return {
+    caseData: {
+      difficulty: 'medium',
+      id: 'case-1',
+      publicBriefing: 'Briefing publico.',
+      summary: 'Resumen del caso.',
+      title: 'Caso de prueba',
+    },
+    culpritSuspectId: 'suspect-1',
+    evidences: [
+      {
+        description: 'Evidencia visible.',
+        id: 'evidence-1',
+        importance: 'critical',
+        isDecoy: false,
+        isInitiallyVisible: true,
+        metadata: {},
+        title: 'Archivo inicial',
+        type: 'document',
+        weight: 10,
+      },
+    ],
+    suspects: [
+      {
+        createdAt: '2026-05-21T00:00:00.000Z',
+        id: 'suspect-1',
+        name: 'Alicia Mora',
+      },
+    ],
   };
 }
 

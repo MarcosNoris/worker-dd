@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { readBoolean, readString } from '../../../shared/utils/value.util';
+import { readString } from '../../../shared/utils/value.util';
 import { AiProviderRequestError } from '../providers/ai-provider-request.error';
 import {
   GenerateCaseStatementsInput,
@@ -26,19 +26,14 @@ export class GeneratedCaseStatementNormalizer {
 
     return {
       culpritSuspectId: input.culpritSuspectId,
-      statements: input.suspects.map((suspect, suspectIndex) =>
-        this.createStatementForSuspect(
-          suspect,
-          suspectIndex,
-          payloadStatements,
-        ),
+      statements: input.suspects.map((suspect) =>
+        this.createStatementForSuspect(suspect, payloadStatements),
       ),
     };
   }
 
   private createStatementForSuspect(
     suspect: GenerateCaseStatementsInput['suspects'][number],
-    suspectIndex: number,
     payloadStatements: readonly StatementPayload[],
   ): GeneratedCaseStatement {
     const payload = this.findPayloadForSuspect(payloadStatements, suspect.id);
@@ -50,10 +45,7 @@ export class GeneratedCaseStatementNormalizer {
         MAX_CONTENT_LENGTH,
       ),
       context: this.readOptionalText(payload?.context, MAX_CONTEXT_LENGTH),
-      isInitiallyVisible: readBoolean(
-        payload?.isInitiallyVisible,
-        suspectIndex === 0,
-      ),
+      isInitiallyVisible: false,
       speakerName: this.readText(
         payload?.speakerName,
         `speakerName para ${suspect.id}`,

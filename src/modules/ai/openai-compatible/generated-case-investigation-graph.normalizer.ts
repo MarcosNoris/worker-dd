@@ -134,6 +134,7 @@ export type InvestigationGraphValidationIssueCode =
   | 'duplicate_unlock_rule'
   | 'action_count_outside_budget'
   | 'initial_action_with_prerequisite'
+  | 'initial_statement_not_allowed'
   | 'interview_action_without_single_suspect'
   | 'invalid_prerequisite_target'
   | 'mandatory_contradiction_not_guaranteed'
@@ -141,6 +142,9 @@ export type InvestigationGraphValidationIssueCode =
   | 'missing_initial_suspect_interview'
   | 'non_initial_action_without_prerequisite'
   | 'self_referencing_prerequisite'
+  | 'statement_unlock_rule_not_guaranteed'
+  | 'statement_unlock_rule_without_interview'
+  | 'statement_without_interview_unlock'
   | 'unreachable_action'
   | 'unreachable_contradiction'
   | 'unreachable_evidence'
@@ -494,6 +498,10 @@ export class GeneratedCaseInvestigationGraphNormalizer {
     return [
       ...this.validateActionCount(content, input),
       ...this.validateUniqueUnlockRules(content),
+      ...this.validateStatementsStartLocked(input, aliases),
+      ...this.validateStatementRulesUseInterviewActions(content),
+      ...this.validateStatementRulesAreGuaranteed(content),
+      ...this.validateEveryStatementHasInterviewUnlock(content, input, aliases),
       ...this.validateInterviewActionsTargetOneSuspect(content, input, aliases),
       ...this.validateEverySuspectHasInitialInterview(content, input, aliases),
       ...this.validateActionPrerequisiteTargets(content),
@@ -964,6 +972,101 @@ export class GeneratedCaseInvestigationGraphNormalizer {
     ];
   }
 
+  private validateStatementsStartLocked(
+    input: GenerateCaseInvestigationGraphInput,
+    aliases: InvestigationGraphAliasCatalog,
+  ): readonly InvestigationGraphValidationIssue[] {
+    return input.statements
+      .filter((statement) => statement.isInitiallyVisible)
+      .map((statement) => {
+        const statementAlias = this.findAliasOrId(
+          aliases.statements,
+          statement.id,
+        );
+
+        return this.createValidationIssue(
+          'initial_statement_not_allowed',
+          `La declaracion ${statementAlias} no puede ser inicialmente visible; debe desbloquearse al completar una entrevista.`,
+          `statements.${statementAlias}`,
+        );
+      });
+  }
+
+  private validateStatementRulesUseInterviewActions(
+    content: GeneratedCaseInvestigationGraphContent,
+  ): readonly InvestigationGraphValidationIssue[] {
+    return content.statementUnlockRules
+      .filter(
+        (rule) =>
+          this.readActionTypeForRule(content.actions, rule.actionTempId) !==
+          'interview',
+      )
+      .map((rule) =>
+        this.createValidationIssue(
+          'statement_unlock_rule_without_interview',
+          `La regla de declaracion para ${rule.statementId} usa la accion ${rule.actionTempId}, pero las declaraciones solo pueden desbloquearse con acciones interview.`,
+          `statementUnlockRules.${rule.actionTempId}:${rule.statementId}`,
+        ),
+      );
+  }
+
+  private validateEveryStatementHasInterviewUnlock(
+    content: GeneratedCaseInvestigationGraphContent,
+    input: GenerateCaseInvestigationGraphInput,
+    aliases: InvestigationGraphAliasCatalog,
+  ): readonly InvestigationGraphValidationIssue[] {
+    return input.statements
+      .filter(
+        (statement) =>
+          !this.hasInterviewUnlockRuleForStatement(statement.id, content),
+      )
+      .map((statement) => {
+        const statementAlias = this.findAliasOrId(
+          aliases.statements,
+          statement.id,
+        );
+
+        return this.createValidationIssue(
+          'statement_without_interview_unlock',
+          `La declaracion ${statementAlias} debe tener una statementUnlockRule apuntando a una accion interview del sospechoso.`,
+          `statements.${statementAlias}`,
+        );
+      });
+  }
+
+  private validateStatementRulesAreGuaranteed(
+    content: GeneratedCaseInvestigationGraphContent,
+  ): readonly InvestigationGraphValidationIssue[] {
+    return content.statementUnlockRules
+      .filter((rule) => !rule.isGuaranteed || rule.successChance !== 1)
+      .map((rule) =>
+        this.createValidationIssue(
+          'statement_unlock_rule_not_guaranteed',
+          `La regla de declaracion para ${rule.statementId} debe ser garantizada con isGuaranteed=true y successChance=1 para aparecer al completar la entrevista.`,
+          `statementUnlockRules.${rule.actionTempId}:${rule.statementId}`,
+        ),
+      );
+  }
+
+  private readActionTypeForRule(
+    actions: readonly GeneratedCaseInvestigationAction[],
+    actionTempId: string,
+  ): GeneratedCaseInvestigationAction['actionType'] | undefined {
+    return actions.find((action) => action.tempId === actionTempId)?.actionType;
+  }
+
+  private hasInterviewUnlockRuleForStatement(
+    statementId: string,
+    content: GeneratedCaseInvestigationGraphContent,
+  ): boolean {
+    return content.statementUnlockRules.some(
+      (rule) =>
+        rule.statementId === statementId &&
+        this.readActionTypeForRule(content.actions, rule.actionTempId) ===
+          'interview',
+    );
+  }
+
   private validateInterviewActionsTargetOneSuspect(
     content: GeneratedCaseInvestigationGraphContent,
     input: GenerateCaseInvestigationGraphInput,
@@ -995,7 +1098,11 @@ export class GeneratedCaseInvestigationGraphNormalizer {
     return [
       this.createValidationIssue(
         'interview_action_without_single_suspect',
-        this.createInterviewActionTargetMessage(action.tempId, suspectIds, aliases),
+        this.createInterviewActionTargetMessage(
+          action.tempId,
+          suspectIds,
+          aliases,
+        ),
         `actions.${action.tempId}`,
       ),
     ];
@@ -1034,11 +1141,9 @@ export class GeneratedCaseInvestigationGraphNormalizer {
           action.actionType === 'interview' && action.isInitiallyAvailable,
       )
       .some((action) =>
-        this.findInterviewActionSuspectIds(
-          action.tempId,
-          content,
-          input,
-        ).has(suspectId),
+        this.findInterviewActionSuspectIds(action.tempId, content, input).has(
+          suspectId,
+        ),
       );
   }
 
@@ -1713,7 +1818,9 @@ export class GeneratedCaseInvestigationGraphNormalizer {
 
     if (
       typeof value === 'string' &&
-      RISK_PROFILES.includes(value as NonNullable<ActionOperationalProfile['riskProfile']>)
+      RISK_PROFILES.includes(
+        value as NonNullable<ActionOperationalProfile['riskProfile']>,
+      )
     ) {
       return value as ActionOperationalProfile['riskProfile'];
     }

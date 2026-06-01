@@ -5,6 +5,7 @@ import {
   AdminEvidenceRecord,
   AdminInvestigationActionRecord,
   AdminSolveRequirementRecord,
+  AdminStatementRecord,
   CasePlayabilitySnapshot,
 } from './cases.repository';
 
@@ -37,6 +38,8 @@ export class CasePlayabilityValidator {
       ...this.validateSolution(snapshot),
       ...this.validateMinimumContent(snapshot),
       ...this.validateContradictions(snapshot),
+      ...this.validateStatementDiscoveryRules(snapshot),
+      ...this.validateInterviewActions(snapshot),
       ...this.validateActionPrerequisites(snapshot),
       ...this.validateMandatoryRequirements(snapshot),
       ...this.validateReachableActions(snapshot),
@@ -145,6 +148,115 @@ export class CasePlayabilityValidator {
       : [
           `La contradiccion "${contradiction.title}" apunta a una evidencia fuera del caso.`,
         ];
+  }
+
+  private validateStatementDiscoveryRules(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return [
+      ...this.validateStatementsStartLocked(snapshot),
+      ...this.validateStatementUnlockRuleReferences(snapshot),
+      ...this.validateStatementUnlockRulesUseInterviews(snapshot),
+      ...this.validateStatementUnlockRulesAreGuaranteed(snapshot),
+      ...this.validateEveryStatementHasInterviewUnlock(snapshot),
+    ];
+  }
+
+  private validateStatementsStartLocked(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return snapshot.statements
+      .filter((statement) => statement.isInitiallyVisible)
+      .map(
+        (statement) =>
+          `La declaracion de "${statement.speakerName}" no puede ser inicialmente visible; debe desbloquearse por entrevista.`,
+      );
+  }
+
+  private validateStatementUnlockRuleReferences(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return snapshot.statementUnlockRules.flatMap((rule) => [
+      ...(this.hasAction(snapshot, rule.actionId)
+        ? []
+        : [
+            `La regla de declaracion "${rule.id}" apunta a una accion fuera del caso.`,
+          ]),
+      ...(this.hasStatement(snapshot, rule.statementId)
+        ? []
+        : [
+            `La regla de declaracion "${rule.id}" apunta a una declaracion fuera del caso.`,
+          ]),
+    ]);
+  }
+
+  private validateStatementUnlockRulesUseInterviews(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return snapshot.statementUnlockRules
+      .filter((rule) => !this.isInterviewAction(snapshot, rule.actionId))
+      .map(
+        (rule) =>
+          `La regla de declaracion "${rule.id}" debe usar una accion de entrevista.`,
+      );
+  }
+
+  private validateStatementUnlockRulesAreGuaranteed(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return snapshot.statementUnlockRules
+      .filter((rule) => !rule.isGuaranteed || rule.successChance !== 1)
+      .map(
+        (rule) =>
+          `La regla de declaracion "${rule.id}" debe ser garantizada con successChance 1.`,
+      );
+  }
+
+  private validateEveryStatementHasInterviewUnlock(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return snapshot.statements
+      .filter((statement) => !this.hasInterviewUnlockRule(snapshot, statement))
+      .map(
+        (statement) =>
+          `La declaracion de "${statement.speakerName}" debe desbloquearse mediante una entrevista.`,
+      );
+  }
+
+  private validateInterviewActions(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return [
+      ...this.validateInterviewActionsTargetOneSuspect(snapshot),
+      ...this.validateEverySuspectHasInitialInterview(snapshot),
+    ];
+  }
+
+  private validateInterviewActionsTargetOneSuspect(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return this.getInterviewActions(snapshot)
+      .filter(
+        (action) =>
+          this.findInterviewTargetSuspectIds(snapshot, action.id).size !== 1,
+      )
+      .map(
+        (action) =>
+          `La entrevista "${action.title}" debe apuntar a un solo sospechoso mediante reglas de declaracion.`,
+      );
+  }
+
+  private validateEverySuspectHasInitialInterview(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return snapshot.suspects
+      .filter(
+        (suspect) => !this.hasInitialInterviewForSuspect(snapshot, suspect.id),
+      )
+      .map(
+        (suspect) =>
+          `El sospechoso "${suspect.name}" debe tener una entrevista inicial propia.`,
+      );
   }
 
   private validateActionPrerequisites(
@@ -677,6 +789,14 @@ export class CasePlayabilityValidator {
     return snapshot.actions.filter((action) => action.isInitiallyAvailable);
   }
 
+  private getInterviewActions(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly AdminInvestigationActionRecord[] {
+    return snapshot.actions.filter(
+      (action) => action.actionType === 'interview',
+    );
+  }
+
   private getMandatoryRequirements(
     snapshot: CasePlayabilitySnapshot,
   ): readonly AdminSolveRequirementRecord[] {
@@ -690,6 +810,37 @@ export class CasePlayabilityValidator {
     actionId: string,
   ): boolean {
     return snapshot.actions.some((action) => action.id === actionId);
+  }
+
+  private hasInterviewUnlockRule(
+    snapshot: CasePlayabilitySnapshot,
+    statement: AdminStatementRecord,
+  ): boolean {
+    return snapshot.statementUnlockRules.some(
+      (rule) =>
+        rule.statementId === statement.id &&
+        this.isInterviewAction(snapshot, rule.actionId),
+    );
+  }
+
+  private hasInitialInterviewForSuspect(
+    snapshot: CasePlayabilitySnapshot,
+    suspectId: string,
+  ): boolean {
+    return this.getInterviewActions(snapshot)
+      .filter((action) => action.isInitiallyAvailable)
+      .some(
+        (action) =>
+          this.findOnlyInterviewTargetSuspectId(snapshot, action.id) ===
+          suspectId,
+      );
+  }
+
+  private isInterviewAction(
+    snapshot: CasePlayabilitySnapshot,
+    actionId: string,
+  ): boolean {
+    return this.findAction(snapshot, actionId)?.actionType === 'interview';
   }
 
   private hasSuspect(
@@ -731,5 +882,42 @@ export class CasePlayabilityValidator {
     return snapshot.contradictions.find(
       (contradiction) => contradiction.id === contradictionId,
     );
+  }
+
+  private findAction(
+    snapshot: CasePlayabilitySnapshot,
+    actionId: string,
+  ): AdminInvestigationActionRecord | undefined {
+    return snapshot.actions.find((action) => action.id === actionId);
+  }
+
+  private findStatement(
+    snapshot: CasePlayabilitySnapshot,
+    statementId: string,
+  ): AdminStatementRecord | undefined {
+    return snapshot.statements.find(
+      (statement) => statement.id === statementId,
+    );
+  }
+
+  private findInterviewTargetSuspectIds(
+    snapshot: CasePlayabilitySnapshot,
+    actionId: string,
+  ): ReadonlySet<string> {
+    const suspectIds = snapshot.statementUnlockRules
+      .filter((rule) => rule.actionId === actionId)
+      .map((rule) => this.findStatement(snapshot, rule.statementId)?.suspectId)
+      .filter((suspectId): suspectId is string => Boolean(suspectId));
+
+    return new Set(suspectIds);
+  }
+
+  private findOnlyInterviewTargetSuspectId(
+    snapshot: CasePlayabilitySnapshot,
+    actionId: string,
+  ): string | undefined {
+    const suspectIds = this.findInterviewTargetSuspectIds(snapshot, actionId);
+
+    return suspectIds.size === 1 ? [...suspectIds][0] : undefined;
   }
 }

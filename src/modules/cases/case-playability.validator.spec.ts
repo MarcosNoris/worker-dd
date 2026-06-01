@@ -8,6 +8,7 @@ import {
   AdminInvestigationActionRecord,
   AdminSolveRequirementRecord,
   AdminStatementRecord,
+  AdminStatementUnlockRuleRecord,
   AdminSuspectRecord,
 } from './cases.repository';
 import { CasePlayabilityValidator } from './case-playability.validator';
@@ -145,6 +146,103 @@ describe('CasePlayabilityValidator', () => {
     );
   });
 
+  it('blocks statements that are initially visible', () => {
+    const statement = createStatement({
+      isInitiallyVisible: true,
+      speakerName: 'Testigo reservado',
+    });
+
+    const validation = validator.validate(
+      createPlayableSnapshot({
+        statements: [statement],
+        statementUnlockRules: [
+          createStatementUnlockRule({
+            statementId: statement.id,
+          }),
+        ],
+      }),
+    );
+
+    expect(validation.canPublish).toBe(false);
+    expect(validation.blockingIssues).toContain(
+      'La declaracion de "Testigo reservado" no puede ser inicialmente visible; debe desbloquearse por entrevista.',
+    );
+  });
+
+  it('blocks statement rules that do not use interviews', () => {
+    const statement = createStatement();
+
+    const validation = validator.validate(
+      createPlayableSnapshot({
+        statements: [statement],
+        statementUnlockRules: [
+          createStatementUnlockRule({
+            actionId: 'action-initial',
+            statementId: statement.id,
+          }),
+        ],
+      }),
+    );
+
+    expect(validation.canPublish).toBe(false);
+    expect(validation.blockingIssues).toContain(
+      'La regla de declaracion "statement-rule-id" debe usar una accion de entrevista.',
+    );
+  });
+
+  it('blocks statement rules that are not guaranteed', () => {
+    const statement = createStatement();
+
+    const validation = validator.validate(
+      createPlayableSnapshot({
+        statements: [statement],
+        statementUnlockRules: [
+          createStatementUnlockRule({
+            isGuaranteed: false,
+            statementId: statement.id,
+            successChance: 0.5,
+          }),
+        ],
+      }),
+    );
+
+    expect(validation.canPublish).toBe(false);
+    expect(validation.blockingIssues).toContain(
+      'La regla de declaracion "statement-rule-id" debe ser garantizada con successChance 1.',
+    );
+  });
+
+  it('blocks interviews that target more than one suspect', () => {
+    const validation = validator.validate(
+      createPlayableSnapshot({
+        actions: [
+          createAction('action-initial'),
+          createAction('interview-shared', {
+            actionType: 'interview',
+            title: 'Entrevista compartida',
+          }),
+        ],
+        statementUnlockRules: [
+          createStatementUnlockRule({
+            actionId: 'interview-shared',
+            id: 'statement-rule-one',
+            statementId: 'statement-one',
+          }),
+          createStatementUnlockRule({
+            actionId: 'interview-shared',
+            id: 'statement-rule-two',
+            statementId: 'statement-two',
+          }),
+        ],
+      }),
+    );
+
+    expect(validation.canPublish).toBe(false);
+    expect(validation.blockingIssues).toContain(
+      'La entrevista "Entrevista compartida" debe apuntar a un solo sospechoso mediante reglas de declaracion.',
+    );
+  });
+
   it('blocks unreachable contradictions even when they are not mandatory', () => {
     const contradiction = createContradiction({
       title: 'Contradiccion opcional',
@@ -176,12 +274,33 @@ function createPlayableSnapshot(
   overrides: Partial<CasePlayabilitySnapshot> = {},
 ): CasePlayabilitySnapshot {
   const culprit = createSuspect('suspect-one');
+  const otherSuspect = createSuspect('suspect-two');
   const evidence = createEvidence({ id: 'evidence-critical' });
   const action = createAction('action-initial');
+  const culpritStatement = createStatement({
+    id: 'statement-one',
+    isInitiallyVisible: false,
+    speakerName: culprit.name,
+    suspectId: culprit.id,
+  });
+  const otherStatement = createStatement({
+    id: 'statement-two',
+    isInitiallyVisible: false,
+    speakerName: otherSuspect.name,
+    suspectId: otherSuspect.id,
+  });
+  const culpritInterview = createAction('interview-suspect-one', {
+    actionType: 'interview',
+    title: 'Entrevistar a suspect-one',
+  });
+  const otherInterview = createAction('interview-suspect-two', {
+    actionType: 'interview',
+    title: 'Entrevistar a suspect-two',
+  });
 
   return {
     actionPrerequisites: [],
-    actions: [action],
+    actions: [action, culpritInterview, otherInterview],
     caseRecord: createCase(),
     contradictionUnlockRules: [],
     contradictions: [],
@@ -205,9 +324,20 @@ function createPlayableSnapshot(
       }),
     ],
     solution: createSolution(culprit.id),
-    statementUnlockRules: [],
-    statements: [],
-    suspects: [culprit, createSuspect('suspect-two')],
+    statementUnlockRules: [
+      createStatementUnlockRule({
+        actionId: culpritInterview.id,
+        id: 'statement-rule-one',
+        statementId: culpritStatement.id,
+      }),
+      createStatementUnlockRule({
+        actionId: otherInterview.id,
+        id: 'statement-rule-two',
+        statementId: otherStatement.id,
+      }),
+    ],
+    statements: [culpritStatement, otherStatement],
+    suspects: [culprit, otherSuspect],
     ...overrides,
   };
 }
@@ -279,9 +409,24 @@ function createStatement(
     content: 'Declaracion contrastable.',
     createdAt: '2026-05-21T00:00:00.000Z',
     id: 'statement-id',
-    isInitiallyVisible: true,
+    isInitiallyVisible: false,
     speakerName: 'Alicia Mora',
     suspectId: 'suspect-one',
+    ...overrides,
+  };
+}
+
+function createStatementUnlockRule(
+  overrides: Partial<AdminStatementUnlockRuleRecord> = {},
+): AdminStatementUnlockRuleRecord {
+  return {
+    actionId: 'interview-suspect-one',
+    createdAt: '2026-05-21T00:00:00.000Z',
+    id: 'statement-rule-id',
+    isGuaranteed: true,
+    minimumSkillLevel: 50,
+    statementId: 'statement-id',
+    successChance: 1,
     ...overrides,
   };
 }
@@ -319,7 +464,10 @@ function createContradictionUnlockRule(
   };
 }
 
-function createAction(id: string): AdminInvestigationActionRecord {
+function createAction(
+  id: string,
+  overrides: Partial<AdminInvestigationActionRecord> = {},
+): AdminInvestigationActionRecord {
   return {
     actionType: 'inspect_scene',
     baseDurationMinutes: 30,
@@ -332,6 +480,7 @@ function createAction(id: string): AdminInvestigationActionRecord {
     minimumSkillLevel: 50,
     requiresDetective: true,
     title: 'Inspeccionar escena',
+    ...overrides,
   };
 }
 

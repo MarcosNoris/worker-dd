@@ -194,6 +194,82 @@ describe('GeneratedCaseInvestigationGraphNormalizer', () => {
     );
   });
 
+  it('reports initially visible statements as invalid graph input', () => {
+    const input = createInputWithInitialStatement();
+    const content = normalizer.createNormalizedContentFromPayload(
+      createValidPayload(),
+      input,
+    );
+
+    const report = normalizer.validateContent(content, input);
+
+    expect(report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'initial_statement_not_allowed',
+          message:
+            'La declaracion ST1 no puede ser inicialmente visible; debe desbloquearse al completar una entrevista.',
+        }),
+      ]),
+    );
+  });
+
+  it('reports statement unlock rules that do not use interview actions', () => {
+    const content = normalizer.createNormalizedContentFromPayload(
+      createValidPayload({
+        statementUnlockRules: [
+          {
+            actionTempId: 'inspect_case_files',
+            isGuaranteed: true,
+            statementAlias: 'ST1',
+            successChance: 1,
+          },
+        ],
+      }),
+      createInput(),
+    );
+
+    const report = normalizer.validateContent(content, createInput());
+
+    expect(report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'statement_unlock_rule_without_interview',
+          message:
+            'La regla de declaracion para statement-id usa la accion inspect_case_files, pero las declaraciones solo pueden desbloquearse con acciones interview.',
+        }),
+      ]),
+    );
+  });
+
+  it('reports statement unlock rules that are not guaranteed', () => {
+    const content = normalizer.createNormalizedContentFromPayload(
+      createValidPayload({
+        statementUnlockRules: [
+          {
+            actionTempId: 'interview_case_circle',
+            isGuaranteed: false,
+            statementAlias: 'ST1',
+            successChance: 0.75,
+          },
+        ],
+      }),
+      createInput(),
+    );
+
+    const report = normalizer.validateContent(content, createInput());
+
+    expect(report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'statement_unlock_rule_not_guaranteed',
+          message:
+            'La regla de declaracion para statement-id debe ser garantizada con isGuaranteed=true y successChance=1 para aparecer al completar la entrevista.',
+        }),
+      ]),
+    );
+  });
+
   it('returns all validation issues for a normalized but incomplete graph', () => {
     const content = normalizer.createNormalizedContentFromPayload(
       createValidPayload({
@@ -453,6 +529,18 @@ function createInput(): GenerateCaseInvestigationGraphInput {
         name: 'Alicia Mora',
       },
     ],
+  };
+}
+
+function createInputWithInitialStatement(): GenerateCaseInvestigationGraphInput {
+  const input = createInput();
+
+  return {
+    ...input,
+    statements: input.statements.map((statement) => ({
+      ...statement,
+      isInitiallyVisible: true,
+    })),
   };
 }
 

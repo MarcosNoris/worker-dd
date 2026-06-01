@@ -33,6 +33,12 @@ El workflow completo usado por `CasesModule` para crear casos estructurados no u
 
 El fallback local puede seguir existiendo para flujos legacy de demo, avances narrativos o veredictos que no pertenecen a la generacion completa de casos.
 
+## Regla estricta de idioma
+
+`AiPromptFactory` inyecta una regla comun de idioma en los prompts narrativos y administrativos. Todos los campos textuales visibles o de diseno deben escribirse en espanol natural, incluidos `title`, `summary`, `publicBriefing`, `description`, `location`, `discoveryHint`, `metadata.proves`, `metadata.narrativePurpose`, `metadata.suggestedUnlockAction`, `content`, `context`, `explanation`, `verdictText`, `bio`, logs y notas.
+
+La IA no debe mezclar ingles ni copiar frases inglesas recibidas en el contexto. Si el contexto trae texto en ingles, el output debe traducirlo al espanol antes de reutilizarlo. Solo se conservan sin traducir IDs, UUIDs, aliases, `tempId`, nombres propios, enums y claves JSON del contrato.
+
 ## Grafo V1 y metadata operativa
 
 `AiPromptFactory` exige que cada accion generada para el grafo incluya:
@@ -289,7 +295,7 @@ Salida:
 }
 ```
 
-El prompt se basa en `utils_prompts/case-statements-generation-prompt.md`, pero la salida runtime se ajusta al DTO real de base de datos: no incluye `metadata`. El campo `content` debe ser una declaracion textual en primera persona; `context` queda para la interpretacion investigativa. Si un proveedor devuelve un array raiz valido de statements en vez de `{ "statements": [] }`, el parser lo envuelve bajo `statements` antes de normalizarlo. Este flujo no usa fallback local: si el proveedor externo falla, devuelve JSON invalido, omite sospechosos o inventa `suspectId`, el modulo registra el error y lanza `ServiceUnavailableException` con el mensaje recibido.
+El prompt se basa en `utils_prompts/case-statements-generation-prompt.md`, pero la salida runtime se ajusta al DTO real de base de datos: no incluye `metadata`. El campo `content` debe ser una declaracion textual en primera persona; `context` queda para la interpretacion investigativa. Todas las declaraciones generadas por IA se normalizan con `isInitiallyVisible: false`, incluso si el proveedor devuelve `true`, porque el jugador solo debe verlas despues de completar una entrevista. Si un proveedor devuelve un array raiz valido de statements en vez de `{ "statements": [] }`, el parser lo envuelve bajo `statements` antes de normalizarlo. Este flujo no usa fallback local: si el proveedor externo falla, devuelve JSON invalido, omite sospechosos o inventa `suspectId`, el modulo registra el error y lanza `ServiceUnavailableException` con el mensaje recibido.
 
 ### `AiService.generateCaseContradictions(input)`
 
@@ -628,7 +634,9 @@ La cantidad de acciones ya no depende solo de la dificultad. `AiPromptFactory` y
 
 El grafo V1 exige entrevistas iniciales por sospechoso. Por cada sospechoso del dossier debe existir una accion `actionType: 'interview'` con `isInitiallyAvailable: true` que desbloquee su declaracion mediante `statementUnlockRules`. Una accion `interview` no puede entrevistar a mas de un sospechoso: si una misma accion desbloquea statements de dos sospechosos distintos, el normalizador reporta `interview_action_without_single_suspect` y fuerza reparacion externa. Si falta una entrevista inicial propia para algun sospechoso, reporta `missing_initial_suspect_interview`.
 
-El normalizador separa la normalizacion del payload y la validacion de jugabilidad. La validacion acumula problemas como acciones no iniciales sin prerequisitos, acciones inalcanzables, evidencias/declaraciones/contradicciones sin ruta, reglas duplicadas y requisitos obligatorios sin ruta garantizada. Este flujo no usa fallback local en el proveedor externo: si la IA falla, devuelve JSON invalido o no logra reparar un grafo imposible, el modulo registra el error y lanza `ServiceUnavailableException`.
+Las declaraciones no pueden ser contenido inicial del grafo generado. Si una declaracion llega con `isInitiallyVisible: true`, la validacion reporta `initial_statement_not_allowed`. Si una regla de `statementUnlockRules` apunta a una accion que no es `actionType: 'interview'`, reporta `statement_unlock_rule_without_interview`. Si una regla de declaracion no es garantizada con `isGuaranteed: true` y `successChance: 1`, reporta `statement_unlock_rule_not_guaranteed`. Si una declaracion no tiene ninguna regla de desbloqueo mediante entrevista, reporta `statement_without_interview_unlock`. Estas reglas existen para que `GET /api/investigations/:investigationId/discovered-statements` solo muestre declaraciones descubiertas por completar entrevistas.
+
+El normalizador separa la normalizacion del payload y la validacion de jugabilidad. La validacion acumula problemas como declaraciones iniciales no permitidas, reglas de declaraciones que no usan entrevistas, acciones no iniciales sin prerequisitos, acciones inalcanzables, evidencias/declaraciones/contradicciones sin ruta, reglas duplicadas y requisitos obligatorios sin ruta garantizada. Este flujo no usa fallback local en el proveedor externo: si la IA falla, devuelve JSON invalido o no logra reparar un grafo imposible, el modulo registra el error y lanza `ServiceUnavailableException`.
 
 Para reducir timeouts y errores de referencias, el prompt de este flujo no serializa los registros completos ni expone UUIDs reales. `AiPromptFactory` transforma el input en un dossier compacto con historia del caso, solucion privada, culpable, catalogos de sospechosos/evidencias/statements/contradicciones y requisitos obligatorios/opcionales usando aliases deterministas como `SP1`, `EV1`, `ST1`, `CT1` y `REQ1`. El dossier omite ruido de persistencia como `createdAt`, `caseId`, `weight`, `metadata` completo y los IDs reales, pero conserva los textos narrativos necesarios para que la IA pueda construir el grafo. `GeneratedCaseInvestigationGraphNormalizer` traduce esos aliases a IDs reales antes de devolver el resultado a `CasesService`.
 

@@ -630,6 +630,11 @@ describe('ExternalAiContentProvider', () => {
       '22222222-2222-4222-8222-222222222222',
       '33333333-3333-4333-8333-333333333333',
     ]);
+    expect(
+      result.content.statements.every(
+        (statement) => statement.isInitiallyVisible === false,
+      ),
+    ).toBe(true);
   });
 
   it('wraps root statement arrays returned by providers', async () => {
@@ -663,6 +668,7 @@ describe('ExternalAiContentProvider', () => {
     expect(result.content.statements).toHaveLength(2);
     expect(result.content.statements[0]).toEqual(
       expect.objectContaining({
+        isInitiallyVisible: false,
         suspectId: '22222222-2222-4222-8222-222222222222',
         speakerName: 'Alicia Mora',
       }),
@@ -1304,7 +1310,7 @@ describe('ExternalAiContentProvider', () => {
         {
           content: 'No estuve cerca del archivo despues del cierre.',
           id: '55555555-5555-4555-8555-555555555555',
-          isInitiallyVisible: true,
+          isInitiallyVisible: false,
           speakerName: 'Alicia Mora',
           suspectId: '22222222-2222-4222-8222-222222222222',
         },

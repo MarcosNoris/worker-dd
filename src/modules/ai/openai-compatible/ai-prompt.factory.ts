@@ -42,6 +42,8 @@ const SYSTEM_PROMPT =
   'Eres el motor narrativo de DEPGame Dispatch Console. Responde exclusivamente con un objeto JSON valido, sin markdown ni texto adicional.';
 const ADMIN_CASE_BASE_SYSTEM_PROMPT =
   'Eres la constructora de casos base de DEPGame Dispatch Console. Disenas expedientes policiales jugables para un flujo administrativo. Responde exclusivamente con un objeto JSON valido, sin markdown ni texto adicional.';
+const STRICT_SPANISH_OUTPUT_RULE =
+  'Idioma obligatorio: escribe en espanol natural todos los campos narrativos visibles o administrativos. Esto incluye title, summary, publicBriefing, description, location, discoveryHint, metadata.proves, metadata.narrativePurpose, metadata.suggestedUnlockAction, content, context, explanation, verdictText, bio y textos dentro de logs o notas. No mezcles ingles ni copies frases inglesas del contexto; si el contexto trae texto en ingles, traducelo al espanol antes de usarlo. Conserva sin traducir solo IDs, UUIDs, aliases, tempIds, nombres propios, enums y claves JSON del contrato.';
 const DETECTIVE_SKILL_LEVEL_GUIDE =
   'Respeta estrictamente esta escala de skills: nivel 1 = 3 skills entre 5 y 25, ninguna supera 30; nivel 2 = 3 skills entre 10 y 35, ninguna supera 40; nivel 3 = 3-4 skills entre 15 y 50, ninguna supera 50; nivel 4 = 3-5 skills entre 25 y 60, solo una skill puede superar 50 y las demas deben ser 50 o menos; nivel 5 = 4-5 skills entre 35 y 70, maximo dos skills pueden superar 60; nivel 6 = 4-5 skills entre 45 y 78, maximo tres skills pueden superar 70; nivel 7 = 4-6 skills entre 55 y 85, maximo tres skills pueden superar 80; nivel 8 = 4-6 skills entre 65 y 90, maximo cuatro skills pueden superar 85; nivel 9 = 5-6 skills entre 75 y 96; nivel 10 = 5-6 skills entre 85 y 100. No infles las habilidades por encima del nivel solicitado.';
 const DETECTIVE_RANK_LEVEL_GUIDE =
@@ -144,7 +146,11 @@ export class AiPromptFactory {
     return [
       this.createSystemMessage(),
       this.createUserMessage(
-        `Genera un caso criminal ficticio en espanol. Devuelve JSON con id, title, codeName, description, location, suspects, clues y logs. Usa category "${input.category}", severity "${input.severity}", status "pending", assignedDetectiveId null y dateCreated ISO. Tema: ${input.theme}. Sospechosos usan status suspect|cleared|arrested. Pistas usan category Fisica|Digital|Testimonio|Biologica|Documental. Logs usan type narrative|discovery|interrogation|clue_analyzed|closing.`,
+        [
+          'Genera un caso criminal ficticio en espanol.',
+          this.describeStrictSpanishOutputRule(),
+          `Devuelve JSON con id, title, codeName, description, location, suspects, clues y logs. Usa category "${input.category}", severity "${input.severity}", status "pending", assignedDetectiveId null y dateCreated ISO. Tema: ${input.theme}. Sospechosos usan status suspect|cleared|arrested. Pistas usan category Fisica|Digital|Testimonio|Biologica|Documental. Logs usan type narrative|discovery|interrogation|clue_analyzed|closing.`,
+        ].join(' '),
       ),
     ];
   }
@@ -157,6 +163,7 @@ export class AiPromptFactory {
       this.createUserMessage(
         [
           'Crea la informacion base de un caso criminal ficticio en espanol para guardar en la tabla cases.',
+          this.describeStrictSpanishOutputRule(),
           `La dificultad obligatoria es "${input.difficulty}" y el JSON debe repetir exactamente esa dificultad.`,
           `Dificultades permitidas: ${ADMIN_CASE_DIFFICULTIES.join(', ')}.`,
           this.describeAdminCaseTheme(input),
@@ -182,6 +189,7 @@ export class AiPromptFactory {
       this.createUserMessage(
         [
           'Actua como disenador narrativo de casos policiales para un juego de investigacion.',
+          this.describeStrictSpanishOutputRule(),
           `Genera exactamente ${input.evidenceCount} evidencias jugables para este caso existente.`,
           this.describeCulpritRule(input),
           this.describeSolutionRule(input),
@@ -207,6 +215,7 @@ export class AiPromptFactory {
       this.createUserMessage(
         [
           'Actua como disenador narrativo de sospechosos para un caso policial jugable.',
+          this.describeStrictSpanishOutputRule(),
           `Genera exactamente ${input.suspectCount} sospechosos para este caso existente.`,
           `La dificultad del caso es ${input.difficulty}; ajusta el nivel de complejidad de motivos, relaciones y notas publicas a esa dificultad.`,
           'No generes evidencias, declaraciones, contradicciones, solucion ni acciones.',
@@ -233,6 +242,7 @@ export class AiPromptFactory {
       this.createUserMessage(
         [
           'Actua como disenador narrativo de declaraciones policiales para un juego de investigacion.',
+          this.describeStrictSpanishOutputRule(),
           'Genera exactamente una declaracion por cada sospechoso del caso.',
           `El culpable privado esperado es ${input.culpritSuspectId}; su declaracion puede ocultar, minimizar o desviar hechos sin confesar directamente.`,
           'Los sospechosos inocentes deben sonar creibles, aportar contexto util y no contradecir evidencias criticas de forma artificial.',
@@ -244,6 +254,7 @@ export class AiPromptFactory {
           'Ejemplo de content invalido: "Describe una parte verificable de su rutina y ofrece un detalle contrastable".',
           'Devuelve solo un objeto JSON, no un array raiz, con la forma exacta {"statements":[]}.',
           'Cada statement debe incluir suspectId, speakerName, content, context e isInitiallyVisible.',
+          'isInitiallyVisible debe ser siempre false: las declaraciones solo aparecen cuando el jugador completa la entrevista del sospechoso.',
           'suspectId debe pertenecer a la lista de sospechosos y debe aparecer exactamente una vez por sospechoso.',
           'No incluyas metadata ni campos extra.',
           `Caso: ${JSON.stringify(input.caseData)}.`,
@@ -262,6 +273,7 @@ export class AiPromptFactory {
       this.createUserMessage(
         [
           'Actua como disenador narrativo de casos policiales para un juego de investigacion.',
+          this.describeStrictSpanishOutputRule(),
           'Genera contradicciones logicas entre statements existentes y evidencias existentes.',
           `Nivel de dificultad: ${input.difficulty}. Genera ${CONTRADICTION_LIMITS_BY_DIFFICULTY[input.difficulty]} contradicciones como maximo narrativo.`,
           `El culpable privado esperado es ${input.culpritSuspectId}. Debe existir al menos una contradiccion valida contra ese sospechoso.`,
@@ -292,6 +304,7 @@ export class AiPromptFactory {
       this.createUserMessage(
         [
           'Actua como disenador narrativo de casos policiales para un juego de investigacion.',
+          this.describeStrictSpanishOutputRule(),
           'Define la solucion privada oficial de este caso criminal ya creado.',
           `El culpable esperado obligatorio es ${input.culpritSuspectId}; copia exactamente este id en culpritSuspectId.`,
           'La solucion debe explicar quien cometio el crimen, por que lo hizo, como lo hizo y cuando tuvo oportunidad.',
@@ -322,6 +335,7 @@ export class AiPromptFactory {
       this.createUserMessage(
         [
           'Actua como disenador narrativo de casos policiales para un juego de investigacion.',
+          this.describeStrictSpanishOutputRule(),
           'Genera requisitos estructurados para que el caso pueda considerarse solucionado.',
           `Nivel de dificultad: ${input.difficulty}. Genera ${REQUIREMENT_LIMITS_BY_DIFFICULTY[input.difficulty]} requisitos.`,
           `El culpable esperado es ${input.culpritSuspectId}; debe existir un requisito culprit obligatorio con requiredSuspectId igual a ese id.`,
@@ -361,6 +375,7 @@ export class AiPromptFactory {
       this.createUserMessage(
         [
           'Actua como disenador mecanico de investigaciones policiales para un juego de gestion.',
+          this.describeStrictSpanishOutputRule(),
           'Genera el grafo completo de acciones y reglas de desbloqueo para un caso ya estructurado.',
           `Nivel de dificultad: ${input.difficulty}. ${describeInvestigationGraphActionBudget(actionBudget)} No generes menos de ${actionBudget.min} ni mas de ${actionBudget.max} acciones.`,
           'El contexto es un dossier compacto con la historia completa necesaria y los catalogos de aliases validos.',
@@ -382,9 +397,11 @@ export class AiPromptFactory {
           'Debe existir exactamente una accion inicial actionType="interview" por cada sospechoso del dossier.',
           'Cada accion interview debe entrevistar a un solo sospechoso: no agrupes dos o mas sospechosos en una misma accion.',
           'Cada entrevista inicial debe desbloquear mediante statementUnlockRules la declaracion del sospechoso que entrevista, y no declaraciones de otros sospechosos.',
+          'Ninguna declaracion puede tratarse como inicial: todos los statements del dossier deben desbloquearse mediante statementUnlockRules desde acciones actionType="interview".',
+          'Todas las reglas de statementUnlockRules deben usar isGuaranteed true y successChance 1 para que completar la entrevista siempre revele la declaracion.',
           'actionPrerequisites usa actionTempId y exactamente uno entre prerequisiteActionTempId, prerequisiteEvidenceAlias o prerequisiteContradictionAlias.',
           'Cada evidencia no visible inicialmente debe tener una regla en evidenceUnlockRules.',
-          'Cada declaracion no visible inicialmente debe tener una regla en statementUnlockRules.',
+          'Cada declaracion debe tener una regla en statementUnlockRules apuntando a una accion interview.',
           'Cada contradiccion no visible inicialmente debe tener una regla en contradictionUnlockRules.',
           'Las evidencias y contradicciones usadas por requisitos obligatorios deben desbloquearse con isGuaranteed true y successChance 1.',
           'Los statements y evidencias que sostienen contradicciones obligatorias tambien deben tener ruta garantizada.',
@@ -417,6 +434,7 @@ export class AiPromptFactory {
       this.createUserMessage(
         [
           'Actua como auditor y reparador de grafos de investigacion policial para un juego de gestion.',
+          this.describeStrictSpanishOutputRule(),
           `Este es el intento de reparacion ${command.attempt} de ${command.maxAttempts}.`,
           'Recibiras el dossier compacto, el JSON anterior generado por IA y los errores exactos encontrados por el backend.',
           'Devuelve el JSON completo corregido con la misma forma exacta: {"actions":[],"evidenceUnlockRules":[],"statementUnlockRules":[],"contradictionUnlockRules":[],"actionPrerequisites":[]}.',
@@ -428,6 +446,8 @@ export class AiPromptFactory {
           'Si una accion no inicial no tiene prerequisitos, agregale un prerequisito logico o marcala como inicial solo si narrativamente corresponde.',
           'Si una evidencia, declaracion o contradiccion no queda descubierta, agrega o ajusta reglas y prerequisitos hasta que tenga ruta desde acciones iniciales.',
           'Cada sospechoso debe quedar cubierto por una accion inicial actionType="interview" propia, y cada accion interview debe apuntar a un solo sospechoso mediante statementUnlockRules.',
+          'Todas las declaraciones deben permanecer bloqueadas al inicio y desbloquearse solo mediante statementUnlockRules de acciones actionType="interview".',
+          'Las reglas de statementUnlockRules deben ser garantizadas: isGuaranteed true y successChance 1.',
           'Las contradicciones deben desbloquearse solo cuando su statement y evidencia refutadora ya puedan descubrirse.',
           'Las evidencias y contradicciones de requisitos obligatorios deben tener ruta garantizada con isGuaranteed true y successChance 1.',
           'Usa solo aliases existentes del dossier como SP1, EV1, ST1, CT1 y REQ1. No inventes IDs reales.',
@@ -452,7 +472,11 @@ export class AiPromptFactory {
     return [
       this.createSystemMessage(),
       this.createUserMessage(
-        `Continua esta investigacion ficticia en espanol. Devuelve JSON con log obligatorio y opcionalmente newClue y suspectUpdate. Accion: ${input.actionType}. targetId: ${input.targetId ?? 'sin objetivo'}. Caso: ${JSON.stringify(input.caseData)}. Detective: ${JSON.stringify(input.detectiveData)}.`,
+        [
+          'Continua esta investigacion ficticia en espanol.',
+          this.describeStrictSpanishOutputRule(),
+          `Devuelve JSON con log obligatorio y opcionalmente newClue y suspectUpdate. Accion: ${input.actionType}. targetId: ${input.targetId ?? 'sin objetivo'}. Caso: ${JSON.stringify(input.caseData)}. Detective: ${JSON.stringify(input.detectiveData)}.`,
+        ].join(' '),
       ),
     ];
   }
@@ -461,7 +485,11 @@ export class AiPromptFactory {
     return [
       this.createSystemMessage(),
       this.createUserMessage(
-        `Evalua una acusacion final ficticia en espanol. Devuelve JSON con success boolean y verdictText narrativo estilo juez o fiscal. Caso: ${JSON.stringify(input.caseData)}. Detective: ${JSON.stringify(input.detectiveData)}. Acusado: ${JSON.stringify(input.accusedSuspect)}. Razonamiento del jugador: ${input.reasoning}.`,
+        [
+          'Evalua una acusacion final ficticia en espanol.',
+          this.describeStrictSpanishOutputRule(),
+          `Devuelve JSON con success boolean y verdictText narrativo estilo juez o fiscal. Caso: ${JSON.stringify(input.caseData)}. Detective: ${JSON.stringify(input.detectiveData)}. Acusado: ${JSON.stringify(input.accusedSuspect)}. Razonamiento del jugador: ${input.reasoning}.`,
+        ].join(' '),
       ),
     ];
   }
@@ -476,6 +504,7 @@ export class AiPromptFactory {
       this.createUserMessage(
         [
           'Genera un perfil de detective ficticio para DEPGame Dispatch Console.',
+          this.describeStrictSpanishOutputRule(),
           'Devuelve JSON con name, rank, bio y skills.',
           'bio debe estar escrita en espanol.',
           `generalSkillLevel=${input.generalSkillLevel}.`,
@@ -549,6 +578,10 @@ export class AiPromptFactory {
     return input.generateSolution
       ? 'Incluye solution con culpritSuspectId, motiveSummary, methodSummary, opportunitySummary y fullExplanation.'
       : 'No incluyas solution; solo selecciona culpable y genera evidencias.';
+  }
+
+  private describeStrictSpanishOutputRule(): string {
+    return STRICT_SPANISH_OUTPUT_RULE;
   }
 
   private createInvestigationGraphPromptContext(
