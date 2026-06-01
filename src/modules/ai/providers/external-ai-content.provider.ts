@@ -175,13 +175,19 @@ export class ExternalAiContentProvider implements AiContentProvider {
   async generateCaseEvidences(
     input: GenerateCaseEvidencesInput,
   ): Promise<AiContentGenerationResult<GeneratedCaseEvidencesContent>> {
-    const evidences = await this.providerRotator.execute((route) =>
-      this.generateCaseEvidencesWithRoute(route, input),
-    );
+    try {
+      const evidences = await this.providerRotator.executeOrThrow(
+        (route) => this.generateCaseEvidencesWithRoute(route, input),
+        (failure) => this.logCaseEvidenceRouteFailure(input, failure),
+      );
 
-    return evidences
-      ? this.createExternalResult(evidences)
-      : this.localContentProvider.generateCaseEvidences(input);
+      return this.createExternalResult(evidences);
+    } catch (error: unknown) {
+      this.logCaseEvidenceGenerationFailure(input, error);
+      throw new ServiceUnavailableException(
+        `No se pudieron generar evidencias con IA: ${this.readErrorMessage(error)}`,
+      );
+    }
   }
 
   async generateCaseSuspects(
@@ -372,14 +378,13 @@ export class ExternalAiContentProvider implements AiContentProvider {
         }),
         'evidences',
       );
-    const fallbackEvidences = (
-      await this.localContentProvider.generateCaseEvidences(input)
-    ).content;
-
     return this.evidenceNormalizer.createContentFromPayload(
       payload,
       input,
-      fallbackEvidences,
+      {
+        evidences: [],
+        selectedCulpritSuspectId: input.culpritSuspectId ?? '',
+      },
     );
   }
 
@@ -678,6 +683,15 @@ export class ExternalAiContentProvider implements AiContentProvider {
     );
   }
 
+  private logCaseEvidenceRouteFailure(
+    input: GenerateCaseEvidencesInput,
+    failure: AiProviderRouteFailure,
+  ): void {
+    this.logger.warn(
+      `AI evidence route failed for case ${input.caseData.id} using ${failure.route.provider}/${failure.route.model}: ${this.readErrorMessage(failure.error)}`,
+    );
+  }
+
   private logCaseContradictionRouteFailure(
     input: GenerateCaseContradictionsInput,
     failure: AiProviderRouteFailure,
@@ -741,6 +755,16 @@ export class ExternalAiContentProvider implements AiContentProvider {
   ): void {
     this.logger.error(
       `AI admin case base generation failed for difficulty ${input.difficulty}: ${this.readErrorMessage(error)}`,
+      this.readErrorStack(error),
+    );
+  }
+
+  private logCaseEvidenceGenerationFailure(
+    input: GenerateCaseEvidencesInput,
+    error: unknown,
+  ): void {
+    this.logger.error(
+      `AI evidence generation failed for case ${input.caseData.id}: ${this.readErrorMessage(error)}`,
       this.readErrorStack(error),
     );
   }

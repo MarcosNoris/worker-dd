@@ -160,6 +160,7 @@ export class AiPromptFactory {
           `La dificultad obligatoria es "${input.difficulty}" y el JSON debe repetir exactamente esa dificultad.`,
           `Dificultades permitidas: ${ADMIN_CASE_DIFFICULTIES.join(', ')}.`,
           this.describeAdminCaseTheme(input),
+          this.describeVictimNamePool(input),
           'No generes sospechosos, evidencias, declaraciones, solucion ni acciones.',
           'Devuelve solo JSON con title, summary, publicBriefing, victimName y difficulty.',
           'title debe tener 3-160 caracteres y debe sonar como nombre de expediente, no como descripcion generica.',
@@ -209,6 +210,7 @@ export class AiPromptFactory {
           `Genera exactamente ${input.suspectCount} sospechosos para este caso existente.`,
           `La dificultad del caso es ${input.difficulty}; ajusta el nivel de complejidad de motivos, relaciones y notas publicas a esa dificultad.`,
           'No generes evidencias, declaraciones, contradicciones, solucion ni acciones.',
+          this.describeSuspectNamePool(input),
           'Los nombres deben ser unicos, pronunciables y verosimiles dentro del mismo expediente.',
           'Devuelve solo un objeto JSON, no un array raiz, con la forma exacta {"suspects":[]}.',
           'Cada sospechoso debe incluir name y puede incluir age, occupation, relationshipToVictim, background, personality y publicNotes.',
@@ -368,10 +370,18 @@ export class AiPromptFactory {
           'No uses actionId ni tempId dentro de reglas; las reglas siempre usan actionTempId.',
           'Usa tempId en snake_case corto y estable, por ejemplo inspect_scene, interview_suspects o analyze_records.',
           'Cada accion debe tener tempId estable, title, description, actionType, requiredSkill, minimumSkillLevel, baseDurationMinutes, isInitiallyAvailable, requiresDetective y metadata.',
+          'Cada accion V1 debe incluir metadata.operationalProfile obligatorio con category, reportQualitySensitivity, fatiguePressure, accelerationEligible y opcionalmente institutionalAccess/riskProfile.',
+          'category debe ser lab|field|records|interview|surveillance|digital|forensic|custom. reportQualitySensitivity y fatiguePressure deben ser low|medium|high. accelerationEligible solo puede contener extra_shift, priority_lab y support_team.',
+          'institutionalAccess solo puede ser state_lab, fast_warrant, federal_cooperation, informants, historical_archive o priority_autopsy. riskProfile solo puede ser standard, aggressive o political.',
+          'La IA no puede inventar costos, recompensas, budget, reputacion, recursos ni resultados garantizados por aceleradores. Solo describe el perfil operativo de la accion.',
           `actionType debe ser uno de: ${ADMIN_ACTION_TYPES.join(', ')}.`,
           `requiredSkill, cuando aplique, debe ser uno de: ${ADMIN_SKILL_TYPES.join(', ')}.`,
           'minimumSkillLevel siempre debe ser un entero entre 50 y 100. Nunca uses valores menores a 50. Usa 50-59 para tareas rutinarias, 60-74 para complejidad media, 75-89 para especialistas y 90-100 solo para acciones expertas.',
+          'baseDurationMinutes conserva el nombre historico, pero debe contener segundos: usa normalmente 180-210 segundos para un promedio cercano a 3-3.5 minutos y nunca superes 600 segundos.',
           'Debe existir al menos una accion inicial. Toda accion no inicial debe tener al menos un prerequisito.',
+          'Debe existir exactamente una accion inicial actionType="interview" por cada sospechoso del dossier.',
+          'Cada accion interview debe entrevistar a un solo sospechoso: no agrupes dos o mas sospechosos en una misma accion.',
+          'Cada entrevista inicial debe desbloquear mediante statementUnlockRules la declaracion del sospechoso que entrevista, y no declaraciones de otros sospechosos.',
           'actionPrerequisites usa actionTempId y exactamente uno entre prerequisiteActionTempId, prerequisiteEvidenceAlias o prerequisiteContradictionAlias.',
           'Cada evidencia no visible inicialmente debe tener una regla en evidenceUnlockRules.',
           'Cada declaracion no visible inicialmente debe tener una regla en statementUnlockRules.',
@@ -383,6 +393,7 @@ export class AiPromptFactory {
           'Devuelve solo JSON con esta forma exacta: {"actions":[],"evidenceUnlockRules":[],"statementUnlockRules":[],"contradictionUnlockRules":[],"actionPrerequisites":[]}.',
           'Formato de regla: evidenceUnlockRules[] usa actionTempId, evidenceAlias, requiredSkill, minimumSkillLevel, durationModifierMinutes, isGuaranteed y successChance; statementUnlockRules[] usa actionTempId, statementAlias, requiredSkill, minimumSkillLevel, isGuaranteed y successChance; contradictionUnlockRules[] usa actionTempId, contradictionAlias, requiredSkill, minimumSkillLevel, isGuaranteed y successChance.',
           'Formato de prerequisito: actionPrerequisites[] usa actionTempId y exactamente uno de prerequisiteActionTempId, prerequisiteEvidenceAlias o prerequisiteContradictionAlias.',
+          'Formato de metadata por accion: {"operationalProfile":{"category":"lab|field|records|interview|surveillance|digital|forensic|custom","reportQualitySensitivity":"low|medium|high","fatiguePressure":"low|medium|high","accelerationEligible":["extra_shift"],"institutionalAccess":"state_lab","riskProfile":"standard"}}.',
           'No incluyas campos extra ni expliques el grafo en texto.',
           `Dossier compacto: ${JSON.stringify(promptContext)}.`,
         ].join(' '),
@@ -416,6 +427,7 @@ export class AiPromptFactory {
           `Solo puedes crear acciones nuevas si el total final sigue entre ${actionBudget.min} y ${actionBudget.max}; si supera el maximo, fusiona acciones relacionadas o reutiliza acciones existentes.`,
           'Si una accion no inicial no tiene prerequisitos, agregale un prerequisito logico o marcala como inicial solo si narrativamente corresponde.',
           'Si una evidencia, declaracion o contradiccion no queda descubierta, agrega o ajusta reglas y prerequisitos hasta que tenga ruta desde acciones iniciales.',
+          'Cada sospechoso debe quedar cubierto por una accion inicial actionType="interview" propia, y cada accion interview debe apuntar a un solo sospechoso mediante statementUnlockRules.',
           'Las contradicciones deben desbloquearse solo cuando su statement y evidencia refutadora ya puedan descubrirse.',
           'Las evidencias y contradicciones de requisitos obligatorios deben tener ruta garantizada con isGuaranteed true y successChance 1.',
           'Usa solo aliases existentes del dossier como SP1, EV1, ST1, CT1 y REQ1. No inventes IDs reales.',
@@ -423,6 +435,9 @@ export class AiPromptFactory {
           `actionType debe ser uno de: ${ADMIN_ACTION_TYPES.join(', ')}.`,
           `requiredSkill, cuando aplique, debe ser uno de: ${ADMIN_SKILL_TYPES.join(', ')}.`,
           'minimumSkillLevel siempre debe ser un entero entre 50 y 100. Nunca uses valores menores a 50.',
+          'baseDurationMinutes conserva el nombre historico, pero debe contener segundos: usa normalmente 180-210 segundos para un promedio cercano a 3-3.5 minutos y nunca superes 600 segundos.',
+          'Cada accion V1 debe conservar metadata.operationalProfile valido: category, reportQualitySensitivity, fatiguePressure, accelerationEligible y opcionalmente institutionalAccess/riskProfile.',
+          'No agregues costos, budget, reputacion, recompensas ni resultados garantizados por aceleradores en el JSON; esas reglas las calcula el backend.',
           `Dossier compacto: ${JSON.stringify(promptContext)}.`,
           `Errores detectados: ${JSON.stringify(command.validationReport.issues)}.`,
           `JSON anterior: ${JSON.stringify(command.previousPayload)}.`,
@@ -459,7 +474,21 @@ export class AiPromptFactory {
     return [
       this.createSystemMessage(),
       this.createUserMessage(
-        `Genera un perfil de detective ficticio para DEPGame Dispatch Console. Devuelve JSON con name, rank, bio y skills. generalSkillLevel=${input.generalSkillLevel}. El campo name debe ser un nombre ${nameGender}. rank debe ser rookie|detective|senior|specialist|lead. ${DETECTIVE_RANK_LEVEL_GUIDE} skills debe tener entre 3 y 6 objetos con skill y level. skill debe usar solo estos valores: ${DETECTIVE_SKILL_TYPES.join(', ')}. ${DETECTIVE_SKILL_LEVEL_GUIDE} No incluyas id ni avatarUrl.`,
+        [
+          'Genera un perfil de detective ficticio para DEPGame Dispatch Console.',
+          'Devuelve JSON con name, rank, bio y skills.',
+          'bio debe estar escrita en espanol.',
+          `generalSkillLevel=${input.generalSkillLevel}.`,
+          `El campo name debe ser un nombre ${nameGender}.`,
+          'No uses nombres existentes ni variantes casi iguales.',
+          `Nombres existentes prohibidos: ${JSON.stringify(input.forbiddenNames)}.`,
+          'rank debe ser rookie|detective|senior|specialist|lead.',
+          DETECTIVE_RANK_LEVEL_GUIDE,
+          'skills debe tener entre 3 y 6 objetos con skill y level.',
+          `skill debe usar solo estos valores: ${DETECTIVE_SKILL_TYPES.join(', ')}.`,
+          DETECTIVE_SKILL_LEVEL_GUIDE,
+          'No incluyas id ni avatarUrl.',
+        ].join(' '),
       ),
     ];
   }
@@ -485,6 +514,29 @@ export class AiPromptFactory {
     return input.theme
       ? `Tematica sugerida por el admin: ${input.theme}. Usala como inspiracion breve, sin copiarla literalmente si produce un titulo pobre.`
       : 'El admin no dio tematica: inventa una premisa original y jugable.';
+  }
+
+  private describeVictimNamePool(input: GenerateAdminCaseBaseInput): string {
+    if (!input.victimNamePool || input.victimNamePool.length === 0) {
+      return 'victimName debe ser un nombre propio ficticio verosimil.';
+    }
+
+    return [
+      `Nombre obligatorio de victima recibido desde Random User Generator: ${JSON.stringify(input.victimNamePool)}.`,
+      'victimName debe ser exactamente uno de esos nombres, sin traducirlo, abreviarlo, cambiarlo ni agregar apodos.',
+    ].join(' ');
+  }
+
+  private describeSuspectNamePool(input: GenerateCaseSuspectsInput): string {
+    if (!input.suspectNamePool || input.suspectNamePool.length === 0) {
+      return 'Puedes inventar nombres propios de sospechosos si son unicos y verosimiles.';
+    }
+
+    return [
+      `Nombres obligatorios de sospechosos recibidos desde Random User Generator: ${JSON.stringify(input.suspectNamePool)}.`,
+      'Cada sospechoso debe usar exactamente uno de esos nombres, sin traducirlo, abreviarlo, cambiarlo ni agregar apodos.',
+      'Usa cada nombre como maximo una vez y no inventes nombres fuera de esa lista.',
+    ].join(' ');
   }
 
   private describeCulpritRule(input: GenerateCaseEvidencesInput): string {

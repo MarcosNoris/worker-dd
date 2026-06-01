@@ -27,6 +27,33 @@ Genera:
 - Veredictos narrativos para acusaciones finales.
 - Perfiles administrativos de detectives.
 
+## Generacion completa de casos sin fallback local
+
+El workflow completo usado por `CasesModule` para crear casos estructurados no usa `LocalAiContentProvider` como rescate. Los pasos `generate_case_base`, `generate_suspects`, `generate_evidences`, `generate_statements`, `generate_contradictions`, `generate_solution`, `generate_solve_requirements` y `generate_investigation_graph` usan proveedores externos con retries. Si todos fallan, el run guarda `lastError`, queda `failed` y la API devuelve el estado fallido del run.
+
+El fallback local puede seguir existiendo para flujos legacy de demo, avances narrativos o veredictos que no pertenecen a la generacion completa de casos.
+
+## Grafo V1 y metadata operativa
+
+`AiPromptFactory` exige que cada accion generada para el grafo incluya:
+
+```ts
+{
+  metadata: {
+    operationalProfile: {
+      category: 'lab' | 'field' | 'records' | 'interview' | 'surveillance' | 'digital' | 'forensic' | 'custom';
+      reportQualitySensitivity: 'low' | 'medium' | 'high';
+      fatiguePressure: 'low' | 'medium' | 'high';
+      accelerationEligible: Array<'extra_shift' | 'priority_lab' | 'support_team'>;
+      institutionalAccess?: 'state_lab' | 'fast_warrant' | 'federal_cooperation' | 'informants' | 'historical_archive' | 'priority_autopsy';
+      riskProfile?: 'standard' | 'aggressive' | 'political';
+    };
+  };
+}
+```
+
+`GeneratedCaseInvestigationGraphNormalizer` rechaza acciones sin ese perfil o con valores fuera del contrato. Las rutas obligatorias siguen usando `isGuaranteed: true` y `successChance: 1`. La IA no debe incluir costos, recompensas, budget, reputacion ni resultados garantizados por aceleradores.
+
 ## Consumidores
 
 - `CasesService`: usa `generateCase`, `generateAdminCaseBase`, `generateCaseSuspects`, `generateCaseEvidences`, `generateCaseStatements`, `generateCaseContradictions`, `generateCaseSolution`, `generateCaseSolveRequirements` y `generateCaseInvestigationGraph`.
@@ -65,6 +92,7 @@ Entrada:
   theme?: string;
   difficulty: 'easy' | 'medium' | 'hard' | 'expert';
   forbiddenTitles: readonly string[];
+  victimNamePool?: readonly string[];
 }
 ```
 
@@ -87,8 +115,10 @@ Reglas:
 - Usa la dificultad ya resuelta por el backend y exige que la IA devuelva esa misma dificultad.
 - Incluye la tematica cuando el admin la envia; si no existe, pide a la IA inventar una premisa.
 - Incluye `forbiddenTitles` para evitar titulos ya usados recientemente.
+- Antes de llamar al proveedor, `AiService` pide un nombre a Random User Generator y lo envia como `victimNamePool`; el prompt exige que `victimName` sea exactamente ese nombre.
 - Exige JSON estricto con `title`, `summary`, `publicBriefing`, `victimName` y `difficulty`.
-- El normalizador rechaza titulo vacio, dificultad invalida, dificultad distinta a la solicitada y textos fuera de los limites del DTO manual.
+- El normalizador rechaza titulo vacio, dificultad invalida, dificultad distinta a la solicitada, textos fuera de los limites del DTO manual y `victimName` fuera de `victimNamePool` cuando existe.
+- Si Random User Generator falla o devuelve pocos nombres, el flujo lanza `ServiceUnavailableException`; no inventa un nombre local para la generacion administrativa estricta.
 - En el proveedor OpenAI-compatible este flujo no usa fallback local. Si ningun proveedor externo devuelve un payload valido, lanza `ServiceUnavailableException`.
 
 ### `AiService.generateCaseSuspects(input)`
@@ -107,6 +137,7 @@ Entrada:
   };
   difficulty: 'easy' | 'medium' | 'hard' | 'expert';
   suspectCount: number;
+  suspectNamePool?: readonly string[];
 }
 ```
 
@@ -130,10 +161,13 @@ Salida:
 Reglas:
 
 - Usa la dificultad real del caso y exige generar exactamente `suspectCount` sospechosos.
+- Antes de llamar al proveedor, `AiService` pide `suspectCount` nombres a Random User Generator y los envia como `suspectNamePool`.
+- El prompt exige usar esos nombres exactamente, sin traducirlos, abreviarlos ni inventar otros.
 - Exige JSON estricto con una unica propiedad `suspects`.
 - No permite campos de persistencia ni referencias a ids inexistentes.
-- El normalizador exige array, cantidad exacta, nombres no vacios, nombres no duplicados normalizados y `age` entero entre `1` y `130` cuando existe.
+- El normalizador exige array, cantidad exacta, nombres no vacios, nombres no duplicados normalizados, nombres pertenecientes a `suspectNamePool` cuando existe y `age` entero entre `1` y `130` cuando existe.
 - Los textos se recortan con los mismos limites del DTO manual de sospechosos.
+- Si Random User Generator falla o devuelve pocos nombres, este flujo falla y deja que el workflow de casos aplique sus retries.
 - En el proveedor OpenAI-compatible este flujo no usa fallback local. Si todos los proveedores externos fallan o el JSON no cumple el contrato, lanza `ServiceUnavailableException` y el consumidor no debe persistir nada.
 
 ### `AiService.generateCaseEvidences(input)`
@@ -195,7 +229,7 @@ Salida:
 }
 ```
 
-El proveedor externo debe devolver JSON estricto. El normalizador recorta al numero solicitado, completa faltantes con fallback local, valida que el culpable pertenezca a los sospechosos recibidos y fuerza `solution.culpritSuspectId` al culpable seleccionado.
+El proveedor externo debe devolver JSON estricto. El normalizador recorta al numero solicitado, completa faltantes con estructura generica del backend si el payload llega incompleto, valida que el culpable pertenezca a los sospechosos recibidos y fuerza `solution.culpritSuspectId` al culpable seleccionado. Este flujo no llama a `LocalAiContentProvider`; si los proveedores externos fallan, lanza `ServiceUnavailableException`.
 
 ### `AiService.generateCaseStatements(input)`
 
@@ -588,7 +622,11 @@ Salida:
 
 `minimumSkillLevel` en acciones y reglas de desbloqueo representa la dificultad operativa para detectives, no un porcentaje de progreso. El rango jugable es `50` a `100`; si el proveedor devuelve un valor menor, el normalizador lo eleva a `50` antes de persistir.
 
+`baseDurationMinutes` conserva el nombre historico del contrato, pero en este flujo representa segundos. El prompt pide duraciones base cercanas a `180-210` segundos para un promedio de `3-3.5` minutos; el normalizador corrige valores fuera del rango jugable a `60-600` segundos antes de persistir.
+
 La cantidad de acciones ya no depende solo de la dificultad. `AiPromptFactory` y `GeneratedCaseInvestigationGraphNormalizer` calculan un presupuesto dinamico con `createInvestigationGraphActionBudget`: parten del rango base de dificultad y lo expanden cuando el caso tiene muchas evidencias, declaraciones o contradicciones ocultas. Asi un caso `medium` compacto sigue esperando `6-9` acciones, pero un caso `medium` denso puede aceptar un rango mayor, por ejemplo `9-12`, si ese volumen es necesario para cubrir el contenido real.
+
+El grafo V1 exige entrevistas iniciales por sospechoso. Por cada sospechoso del dossier debe existir una accion `actionType: 'interview'` con `isInitiallyAvailable: true` que desbloquee su declaracion mediante `statementUnlockRules`. Una accion `interview` no puede entrevistar a mas de un sospechoso: si una misma accion desbloquea statements de dos sospechosos distintos, el normalizador reporta `interview_action_without_single_suspect` y fuerza reparacion externa. Si falta una entrevista inicial propia para algun sospechoso, reporta `missing_initial_suspect_interview`.
 
 El normalizador separa la normalizacion del payload y la validacion de jugabilidad. La validacion acumula problemas como acciones no iniciales sin prerequisitos, acciones inalcanzables, evidencias/declaraciones/contradicciones sin ruta, reglas duplicadas y requisitos obligatorios sin ruta garantizada. Este flujo no usa fallback local en el proveedor externo: si la IA falla, devuelve JSON invalido o no logra reparar un grafo imposible, el modulo registra el error y lanza `ServiceUnavailableException`.
 
@@ -682,7 +720,9 @@ El rango tambien se deriva de `generalSkillLevel`: `1-2 rookie`, `3-4 detective`
 
 El proveedor activo es `ExternalAiContentProvider`. Intenta rutas externas configuradas por variables de entorno y rota entre proveedores/modelos cuando una ruta falla por limite, timeout, error de red, respuesta vacia o JSON invalido. Google usa Gemini Developer API mediante `@google/genai`; los demas proveedores actuales usan transporte OpenAI-compatible.
 
-`LocalAiContentProvider` queda como fallback final para los flujos que lo admiten, como `generateCase` y `generateCaseEvidences`. Cuando se usa, `usedFallback` vuelve como `true`.
+Antes de `generateAdminCaseBase` y `generateCaseSuspects`, `AiService` consulta `https://randomuser.me/api/1.4/` para obtener nombres de victima y sospechosos. Esos nombres se inyectan al prompt y luego se validan en los normalizadores. Esta llamada forma parte del flujo estricto: si falla, no se activa contenido local y el consumidor recibe error.
+
+`LocalAiContentProvider` queda como fallback final solo para los flujos que lo admiten, como el caso demo legacy, avances narrativos y veredictos. La generacion administrativa completa de casos no lo usa como rescate.
 
 Los flujos administrativos estrictos (`generateAdminCaseBase`, `generateCaseSuspects`, `generateCaseStatements`, `generateCaseContradictions`, `generateCaseSolution`, `generateCaseSolveRequirements`, `generateCaseInvestigationGraph` y `generateDetectiveProfile`) no persisten contenido si todos los proveedores externos fallan o devuelven payloads invalidos.
 
@@ -801,6 +841,7 @@ Las API keys de proveedores externos no deben exponerse al frontend.
 
 - `ai.module.ts`: registra el proveedor activo y exporta `AiService`.
 - `ai.service.ts`: fachada estable para los consumidores del modulo.
+- `random-user-name.service.ts`: consulta Random User Generator y entrega nombres externos para victimas y sospechosos de casos IA.
 - `providers/ai-content-provider.interface.ts`: contrato comun para proveedores de contenido.
 - `providers/external-ai-content.provider.ts`: proveedor externo con rotacion entre rutas Google GenAI y OpenAI-compatible.
 - `providers/ai-text-generation-client.service.ts`: despacha cada ruta al cliente de texto correspondiente.
@@ -808,14 +849,14 @@ Las API keys de proveedores externos no deben exponerse al frontend.
 - `openai-compatible/ai-detective-profile.service.ts`: genera perfiles administrativos de detectives.
 - `openai-compatible/ai-prompt-registry.service.ts`: guarda prompts y respuestas crudas en `registry/` cuando `AI_PROMPT_REGISTRY_ENABLED=true`.
 - `openai-compatible/json-object.parser.ts`: extrae y parsea respuestas JSON de proveedores; adapta arrays raiz solo en contratos de colecciones donde existe una propiedad esperada.
-- `openai-compatible/generated-admin-case-base.normalizer.ts`: normaliza casos base administrativos y valida dificultad, titulos y limites de texto.
+- `openai-compatible/generated-admin-case-base.normalizer.ts`: normaliza casos base administrativos y valida dificultad, titulos, limites de texto y nombre de victima externo cuando aplica.
 - `openai-compatible/generated-case-contradiction.normalizer.ts`: normaliza contradicciones generadas y valida referencias existentes.
 - `openai-compatible/generated-case-evidence.normalizer.ts`: normaliza evidencias y soluciones generadas para casos estructurados.
 - `openai-compatible/generated-case-investigation-graph.normalizer.ts`: normaliza acciones, reglas de desbloqueo y prerequisitos generados, y valida que el grafo sea alcanzable.
 - `openai-compatible/generated-case-solve-requirement.normalizer.ts`: normaliza requisitos de resolucion generados y valida cantidades, enums e IDs existentes.
 - `openai-compatible/generated-case-solution.normalizer.ts`: normaliza soluciones privadas generadas y exige que el culpable coincida con el solicitado.
 - `openai-compatible/generated-case-statement.normalizer.ts`: normaliza declaraciones generadas y garantiza una por sospechoso.
-- `openai-compatible/generated-case-suspect.normalizer.ts`: normaliza sospechosos generados y valida cantidad exacta, nombres unicos, edad y limites de texto.
+- `openai-compatible/generated-case-suspect.normalizer.ts`: normaliza sospechosos generados y valida cantidad exacta, nombres unicos, nombres externos obligatorios, edad y limites de texto.
 - `openai-compatible/detective-profile.normalizer.ts`: normaliza perfiles de detectives generados.
 - `providers/ai-provider-registry.service.ts`: lee rutas desde variables de entorno.
 - `providers/ai-provider-rotator.service.ts`: aplica prioridad y cooldown en memoria.

@@ -54,6 +54,7 @@ describe('AiDetectiveProfileService', () => {
 
     await expect(
       service.generateDetectiveProfile({
+        forbiddenNames: [],
         gender: 'female',
         generalSkillLevel: 8,
       }),
@@ -83,6 +84,7 @@ describe('AiDetectiveProfileService', () => {
     const service = createService([nvidiaRoute], client, promptRegistry);
 
     await service.generateDetectiveProfile({
+      forbiddenNames: [],
       gender: 'female',
       generalSkillLevel: 8,
     });
@@ -112,6 +114,7 @@ describe('AiDetectiveProfileService', () => {
     const service = createService([nvidiaRoute, cerebrasRoute], client);
 
     const profile = await service.generateDetectiveProfile({
+      forbiddenNames: [],
       gender: 'male',
       generalSkillLevel: 10,
     });
@@ -142,6 +145,7 @@ describe('AiDetectiveProfileService', () => {
     const service = createService([googleRoute, nvidiaRoute], client);
 
     const profile = await service.generateDetectiveProfile({
+      forbiddenNames: [],
       gender: 'male',
       generalSkillLevel: 10,
     });
@@ -168,6 +172,7 @@ describe('AiDetectiveProfileService', () => {
 
     await expect(
       service.generateDetectiveProfile({
+        forbiddenNames: [],
         gender: 'female',
         generalSkillLevel: 7,
       }),
@@ -189,6 +194,7 @@ describe('AiDetectiveProfileService', () => {
 
     await expect(
       service.generateDetectiveProfile({
+        forbiddenNames: [],
         gender: 'male',
         generalSkillLevel: 4,
       }),
@@ -207,6 +213,7 @@ describe('AiDetectiveProfileService', () => {
     const service = createService([nvidiaRoute], client);
 
     await service.generateDetectiveProfile({
+      forbiddenNames: [],
       gender: 'female',
       generalSkillLevel: 8,
     });
@@ -217,6 +224,40 @@ describe('AiDetectiveProfileService', () => {
         messages: expect.arrayContaining([
           expect.objectContaining({
             content: expect.stringContaining('nombre femenino'),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it('asks the provider to avoid existing detective names', async () => {
+    const client = createClientMock([
+      JSON.stringify({
+        name: 'Ana Vargas',
+        rank: 'specialist',
+        bio: 'Perfil generado por IA.',
+        skills: [{ skill: 'interrogation', level: 88 }],
+      }),
+    ]);
+    const service = createService([nvidiaRoute], client);
+
+    await service.generateDetectiveProfile({
+      forbiddenNames: ['Elena Vargas', 'Marco Reyes'],
+      gender: 'female',
+      generalSkillLevel: 8,
+    });
+
+    expect(client.createTextCompletion).toHaveBeenCalledWith(
+      nvidiaRoute,
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            content: expect.stringContaining(
+              'No uses nombres existentes ni variantes casi iguales',
+            ),
+          }),
+          expect.objectContaining({
+            content: expect.stringContaining('["Elena Vargas","Marco Reyes"]'),
           }),
         ]),
       }),
@@ -242,6 +283,7 @@ describe('AiDetectiveProfileService', () => {
 
     await expect(
       service.generateDetectiveProfile({
+        forbiddenNames: [],
         gender: 'female',
         generalSkillLevel: 4,
       }),
@@ -269,6 +311,7 @@ describe('AiDetectiveProfileService', () => {
     const service = createService([nvidiaRoute], client);
 
     await service.generateDetectiveProfile({
+      forbiddenNames: [],
       gender: 'male',
       generalSkillLevel: 4,
     });
@@ -279,6 +322,37 @@ describe('AiDetectiveProfileService', () => {
         messages: expect.arrayContaining([
           expect.objectContaining({
             content: expect.stringContaining('nivel 3-4 usa detective'),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it('asks the provider to write the bio in Spanish', async () => {
+    const client = createClientMock([
+      JSON.stringify({
+        name: 'Marco Reyes',
+        rank: 'detective',
+        bio: 'Detective regular.',
+        skills: [{ skill: 'surveillance', level: 48 }],
+      }),
+    ]);
+    const service = createService([nvidiaRoute], client);
+
+    await service.generateDetectiveProfile({
+      forbiddenNames: [],
+      gender: 'male',
+      generalSkillLevel: 4,
+    });
+
+    expect(client.createTextCompletion).toHaveBeenCalledWith(
+      nvidiaRoute,
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            content: expect.stringContaining(
+              'bio debe estar escrita en espanol',
+            ),
           }),
         ]),
       }),

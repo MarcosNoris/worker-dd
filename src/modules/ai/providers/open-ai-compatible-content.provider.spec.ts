@@ -335,6 +335,27 @@ describe('ExternalAiContentProvider', () => {
     ).rejects.toThrow('summary');
   });
 
+  it('throws when generated admin case base victim name is outside the required pool', async () => {
+    const client = createClientMock([
+      JSON.stringify({
+        difficulty: 'medium',
+        summary:
+          'Una investigacion interna descubre un patron de sabotaje documental.',
+        title: 'El Sello Roto',
+        victimName: 'Nombre Inventado',
+      }),
+    ]);
+    const provider = createProvider([nvidiaRoute], client);
+
+    await expect(
+      provider.generateAdminCaseBase(
+        createGenerateAdminCaseBaseInput({
+          victimNamePool: ['Victor Ramos'],
+        }),
+      ),
+    ).rejects.toThrow('Random User Generator');
+  });
+
   it('converts a valid provider response into generated case suspects', async () => {
     const client = createClientMock([
       JSON.stringify({
@@ -419,6 +440,23 @@ describe('ExternalAiContentProvider', () => {
     await expect(
       provider.generateCaseSuspects(createGenerateCaseSuspectsInput()),
     ).rejects.toThrow('se esperaban 2');
+  });
+
+  it('throws when generated suspects use names outside the required pool', async () => {
+    const client = createClientMock([
+      JSON.stringify({
+        suspects: [{ name: 'Alicia Mora' }, { name: 'Nombre Inventado' }],
+      }),
+    ]);
+    const provider = createProvider([nvidiaRoute], client);
+
+    await expect(
+      provider.generateCaseSuspects(
+        createGenerateCaseSuspectsInput({
+          suspectNamePool: ['Alicia Mora', 'Bruno Rivas'],
+        }),
+      ),
+    ).rejects.toThrow('Random User Generator');
   });
 
   it('converts a valid provider response into generated case evidences', async () => {
@@ -537,7 +575,7 @@ describe('ExternalAiContentProvider', () => {
     );
   });
 
-  it('uses local evidence fallback when every external provider fails', async () => {
+  it('throws when every external evidence provider fails', async () => {
     const client = {
       createTextCompletion: jest
         .fn()
@@ -545,15 +583,11 @@ describe('ExternalAiContentProvider', () => {
     } as unknown as jest.Mocked<AiTextGenerationClient>;
     const provider = createProvider([nvidiaRoute], client);
 
-    const result = await provider.generateCaseEvidences(
-      createGenerateCaseEvidencesInput({ evidenceCount: 4 }),
-    );
-
-    expect(result.usedFallback).toBe(true);
-    expect(result.content.evidences).toHaveLength(4);
-    expect(result.content.selectedCulpritSuspectId).toBe(
-      '22222222-2222-4222-8222-222222222222',
-    );
+    await expect(
+      provider.generateCaseEvidences(
+        createGenerateCaseEvidencesInput({ evidenceCount: 4 }),
+      ),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
   it('converts a valid provider response into generated case statements', async () => {
@@ -955,10 +989,14 @@ describe('ExternalAiContentProvider', () => {
     );
 
     expect(result.usedFallback).toBe(false);
-    expect(result.content.actions).toHaveLength(6);
+    expect(result.content.actions).toHaveLength(7);
     expect(result.content.statementUnlockRules).toEqual([
       expect.objectContaining({
-        actionTempId: 'interview_case_circle',
+        actionTempId: 'interview_alicia_mora',
+        statementId: '55555555-5555-4555-8555-555555555555',
+      }),
+      expect.objectContaining({
+        actionTempId: 'interview_bruno_rivas',
         statementId: '66666666-6666-4666-8666-666666666666',
       }),
     ]);
@@ -987,7 +1025,7 @@ describe('ExternalAiContentProvider', () => {
     );
 
     expect(result.usedFallback).toBe(false);
-    expect(result.content.actions).toHaveLength(6);
+    expect(result.content.actions).toHaveLength(7);
     expect(client.createTextCompletion).toHaveBeenCalledTimes(2);
     expect(promptRegistry.savePrompt).toHaveBeenNthCalledWith(
       1,
@@ -1389,7 +1427,11 @@ describe('ExternalAiContentProvider', () => {
         },
         {
           actionTempId: 'compare_versions',
-          prerequisiteActionTempId: 'interview_case_circle',
+          prerequisiteActionTempId: 'interview_alicia_mora',
+        },
+        {
+          actionTempId: 'compare_versions',
+          prerequisiteActionTempId: 'interview_bruno_rivas',
         },
         {
           actionTempId: 'follow_up_line_1',
@@ -1413,7 +1455,13 @@ describe('ExternalAiContentProvider', () => {
           actionType: 'interview',
           isInitiallyAvailable: true,
           requiredSkill: 'interrogation',
-          tempId: 'interview_case_circle',
+          tempId: 'interview_alicia_mora',
+        }),
+        createInvestigationActionPayload({
+          actionType: 'interview',
+          isInitiallyAvailable: true,
+          requiredSkill: 'interrogation',
+          tempId: 'interview_bruno_rivas',
         }),
         createInvestigationActionPayload({
           actionType: 'custom',
@@ -1435,7 +1483,13 @@ describe('ExternalAiContentProvider', () => {
       evidenceUnlockRules: [],
       statementUnlockRules: [
         {
-          actionTempId: 'interview_case_circle',
+          actionTempId: 'interview_alicia_mora',
+          isGuaranteed: true,
+          statementId: '55555555-5555-4555-8555-555555555555',
+          successChance: 1,
+        },
+        {
+          actionTempId: 'interview_bruno_rivas',
           isGuaranteed: true,
           statementId: '66666666-6666-4666-8666-666666666666',
           successChance: 1,
@@ -1450,10 +1504,18 @@ describe('ExternalAiContentProvider', () => {
   ): Record<string, unknown> {
     return {
       actionType: 'inspect_scene',
-      baseDurationMinutes: 45,
+      baseDurationMinutes: 210,
       description: 'Accion de investigacion.',
       isInitiallyAvailable: false,
-      metadata: {},
+      metadata: {
+        operationalProfile: {
+          accelerationEligible: ['extra_shift', 'support_team'],
+          category: 'field',
+          fatiguePressure: 'medium',
+          reportQualitySensitivity: 'medium',
+          riskProfile: 'standard',
+        },
+      },
       minimumSkillLevel: 50,
       requiredSkill: 'crime_scene_analysis',
       requiresDetective: true,

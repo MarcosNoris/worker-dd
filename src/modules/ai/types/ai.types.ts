@@ -14,6 +14,11 @@ import type {
   AdminRequirementType,
   AdminSkillType,
 } from '../../cases/constants/admin-case.constants';
+import type {
+  ActionOperationalCategory,
+  InvestigationAccelerationType,
+} from '../../rules/investigation-acceleration-rule.service';
+import type { InstitutionalAccess } from '../../rules/institutional-access-rule.service';
 import {
   InvestigationActionType,
   InvestigationStepResult,
@@ -35,6 +40,7 @@ export interface GenerateAdminCaseBaseInput {
   readonly difficulty: AdminCaseDifficulty;
   readonly forbiddenTitles: readonly string[];
   readonly theme?: string;
+  readonly victimNamePool?: readonly string[];
 }
 
 export interface GeneratedAdminCaseBase {
@@ -62,6 +68,7 @@ export interface GenerateCaseSuspectsInput {
   readonly caseData: CaseEvidenceGenerationCaseContext;
   readonly difficulty: AdminCaseDifficulty;
   readonly suspectCount: number;
+  readonly suspectNamePool?: readonly string[];
 }
 
 export interface GeneratedCaseSuspect {
@@ -241,6 +248,7 @@ export interface CaseSolveRequirementGenerationSolutionContext extends Generated
 
 export interface CaseSolveRequirementGenerationActionContext {
   readonly actionType: string;
+  /** Legacy name: this value is stored as seconds. */
   readonly baseDurationMinutes: number;
   readonly description: string;
   readonly id: string;
@@ -334,15 +342,32 @@ export interface GenerateCaseInvestigationGraphInput {
 
 export interface GeneratedCaseInvestigationAction {
   readonly actionType: AdminActionType;
+  /** Legacy name: this value is generated and stored as seconds. */
   readonly baseDurationMinutes: number;
   readonly description: string;
   readonly isInitiallyAvailable: boolean;
-  readonly metadata: Record<string, unknown>;
+  readonly metadata: ActionOperationalMetadata;
   readonly minimumSkillLevel: number;
   readonly requiredSkill?: AdminSkillType;
   readonly requiresDetective: boolean;
   readonly tempId: string;
   readonly title: string;
+}
+
+export type ActionOperationalSensitivity = 'low' | 'medium' | 'high';
+export type ActionRiskProfile = 'standard' | 'aggressive' | 'political';
+
+export interface ActionOperationalProfile {
+  readonly accelerationEligible: readonly InvestigationAccelerationType[];
+  readonly category: ActionOperationalCategory;
+  readonly fatiguePressure: ActionOperationalSensitivity;
+  readonly institutionalAccess?: InstitutionalAccess;
+  readonly reportQualitySensitivity: ActionOperationalSensitivity;
+  readonly riskProfile?: ActionRiskProfile;
+}
+
+export interface ActionOperationalMetadata extends Record<string, unknown> {
+  readonly operationalProfile: ActionOperationalProfile;
 }
 
 export interface GeneratedEvidenceUnlockRule {
@@ -438,6 +463,7 @@ export type GeneratedDetectiveGender =
 
 export interface GenerateDetectiveProfileInput {
   gender: GeneratedDetectiveGender;
+  readonly forbiddenNames: readonly string[];
   generalSkillLevel: number;
 }
 

@@ -5,6 +5,7 @@ import {
   GeneratedCaseSuspectsContent,
   GenerateCaseSuspectsInput,
 } from '../types/ai.types';
+import { readGeneratedNameFromPool } from './generated-name-pool.validator';
 
 const MAX_NAME_LENGTH = 300;
 const MAX_SHORT_TEXT_LENGTH = 300;
@@ -35,17 +36,18 @@ export class GeneratedCaseSuspectNormalizer {
     const suspects = this.readPayloadSuspects(payload.suspects, input);
 
     return {
-      suspects: this.createSuspects(suspects),
+      suspects: this.createSuspects(suspects, input),
     };
   }
 
   private createSuspects(
     payloadSuspects: readonly SuspectPayload[],
+    input: GenerateCaseSuspectsInput,
   ): readonly GeneratedCaseSuspect[] {
     const normalizedNames = new Set<string>();
 
     return payloadSuspects.map((payload, suspectIndex) =>
-      this.createSuspect(payload, suspectIndex, normalizedNames),
+      this.createSuspect(payload, suspectIndex, normalizedNames, input),
     );
   }
 
@@ -53,11 +55,11 @@ export class GeneratedCaseSuspectNormalizer {
     payload: SuspectPayload,
     suspectIndex: number,
     normalizedNames: Set<string>,
+    input: GenerateCaseSuspectsInput,
   ): GeneratedCaseSuspect {
-    const name = this.readRequiredText(
-      payload.name,
-      `name del sospechoso ${suspectIndex + 1}`,
-      MAX_NAME_LENGTH,
+    const name = this.readAllowedSuspectName(
+      this.readSuspectName(payload, suspectIndex),
+      input,
     );
 
     this.ensureUniqueName(name, normalizedNames);
@@ -119,6 +121,29 @@ export class GeneratedCaseSuspectNormalizer {
     return value as SuspectPayload;
   }
 
+  private readSuspectName(
+    payload: SuspectPayload,
+    suspectIndex: number,
+  ): string {
+    return this.readRequiredText(
+      payload.name,
+      `name del sospechoso ${suspectIndex + 1}`,
+      MAX_NAME_LENGTH,
+    );
+  }
+
+  private readAllowedSuspectName(
+    name: string,
+    input: GenerateCaseSuspectsInput,
+  ): string {
+    return readGeneratedNameFromPool({
+      errorCode: 'invalid_generated_suspects',
+      fieldName: 'name',
+      name,
+      namePool: input.suspectNamePool,
+    });
+  }
+
   private readRequiredText(
     value: unknown,
     fieldName: string,
@@ -168,10 +193,7 @@ export class GeneratedCaseSuspectNormalizer {
     );
   }
 
-  private ensureUniqueName(
-    name: string,
-    normalizedNames: Set<string>,
-  ): void {
+  private ensureUniqueName(name: string, normalizedNames: Set<string>): void {
     const normalizedName = name.replace(/\s+/g, ' ').trim().toLowerCase();
 
     if (normalizedNames.has(normalizedName)) {

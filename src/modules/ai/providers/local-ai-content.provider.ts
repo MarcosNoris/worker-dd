@@ -49,6 +49,7 @@ const DEFAULT_ADMIN_CASE_THEME = 'un sabotaje interno en un archivo policial';
 const MAX_ADMIN_CASE_TITLE_LENGTH = 160;
 const MINIMUM_REASONING_LENGTH = 15;
 const MINIMUM_INVESTIGATION_SKILL_LEVEL = 50;
+const DEFAULT_INVESTIGATION_ACTION_DURATION_SECONDS = 210;
 type LocalSuspectRole = 'principal' | 'testigo' | 'beneficiaria';
 
 interface LocalSuspectProfile {
@@ -304,7 +305,7 @@ export class LocalAiContentProvider implements AiContentProvider {
       publicBriefing: `La unidad recibe un expediente inicial sobre ${theme}. El briefing presenta suficientes preguntas abiertas para iniciar entrevistas, revisar evidencias y construir una teoria verificable.`,
       summary: `Caso generado localmente sobre ${theme}. El expediente base define el conflicto, la victima principal y una linea de investigacion adecuada para dificultad ${input.difficulty}.`,
       title,
-      victimName: 'Victima pendiente de identificar',
+      victimName: this.readLocalVictimName(input),
     };
   }
 
@@ -353,24 +354,59 @@ export class LocalAiContentProvider implements AiContentProvider {
   private createAdminCaseSuspects(
     input: GenerateCaseSuspectsInput,
   ): GeneratedCaseSuspect[] {
-    return LOCAL_ADMIN_SUSPECT_PROFILES.slice(0, input.suspectCount).map(
-      (profile) => this.createAdminCaseSuspect(input, profile),
+    return Array.from({ length: input.suspectCount }, (_, suspectIndex) =>
+      this.createAdminCaseSuspect(
+        input,
+        this.readLocalAdminSuspectProfile(suspectIndex),
+        suspectIndex,
+      ),
     );
   }
 
   private createAdminCaseSuspect(
     input: GenerateCaseSuspectsInput,
     profile: LocalAdminSuspectProfile,
+    suspectIndex: number,
   ): GeneratedCaseSuspect {
     return {
       age: profile.age,
       background: `${profile.background} Caso vinculado: ${input.caseData.title}.`,
-      name: profile.name,
+      name: this.readLocalSuspectName(input, profile, suspectIndex),
       occupation: profile.occupation,
       personality: profile.personality,
       publicNotes: `${profile.publicNotes} Dificultad narrativa: ${input.difficulty}.`,
       relationshipToVictim: profile.relationshipToVictim,
     };
+  }
+
+  private readLocalVictimName(input: GenerateAdminCaseBaseInput): string {
+    return input.victimNamePool?.[0] ?? 'Victima pendiente de identificar';
+  }
+
+  private readLocalAdminSuspectProfile(
+    suspectIndex: number,
+  ): LocalAdminSuspectProfile {
+    return LOCAL_ADMIN_SUSPECT_PROFILES[
+      suspectIndex % LOCAL_ADMIN_SUSPECT_PROFILES.length
+    ];
+  }
+
+  private readLocalSuspectName(
+    input: GenerateCaseSuspectsInput,
+    profile: LocalAdminSuspectProfile,
+    suspectIndex: number,
+  ): string {
+    const generatedName = input.suspectNamePool?.[suspectIndex];
+
+    if (generatedName) {
+      return generatedName;
+    }
+
+    if (suspectIndex < LOCAL_ADMIN_SUSPECT_PROFILES.length) {
+      return profile.name;
+    }
+
+    return `${profile.name} ${suspectIndex + 1}`;
   }
 
   private createCaseStatements(
@@ -443,7 +479,7 @@ export class LocalAiContentProvider implements AiContentProvider {
   private createLocalInvestigationActions(
     input: GenerateCaseInvestigationGraphInput,
   ): GeneratedCaseInvestigationAction[] {
-    const actions = this.createCoreInvestigationActions();
+    const actions = this.createCoreInvestigationActions(input);
     const actionBudget = createInvestigationGraphActionBudget(input);
 
     while (actions.length < actionBudget.min) {
@@ -453,7 +489,9 @@ export class LocalAiContentProvider implements AiContentProvider {
     return actions;
   }
 
-  private createCoreInvestigationActions(): GeneratedCaseInvestigationAction[] {
+  private createCoreInvestigationActions(
+    input: GenerateCaseInvestigationGraphInput,
+  ): GeneratedCaseInvestigationAction[] {
     return [
       this.createInvestigationAction({
         actionType: 'inspect_scene',
@@ -464,15 +502,16 @@ export class LocalAiContentProvider implements AiContentProvider {
         tempId: 'inspect_case_files',
         title: 'Revisar expediente y escena',
       }),
-      this.createInvestigationAction({
-        actionType: 'interview',
-        description:
-          'Tomar declaraciones formales a sospechosos y testigos clave.',
-        isInitiallyAvailable: true,
-        requiredSkill: 'interrogation',
-        tempId: 'interview_case_circle',
-        title: 'Entrevistar circulo del caso',
-      }),
+      ...input.suspects.map((suspect, suspectIndex) =>
+        this.createInvestigationAction({
+          actionType: 'interview',
+          description: `Tomar una declaracion formal a ${suspect.name}.`,
+          isInitiallyAvailable: true,
+          requiredSkill: 'interrogation',
+          tempId: `interview_suspect_${suspectIndex + 1}`,
+          title: `Entrevistar a ${suspect.name}`,
+        }),
+      ),
       this.createInvestigationAction({
         actionType: 'custom',
         description:
@@ -504,17 +543,49 @@ export class LocalAiContentProvider implements AiContentProvider {
   ): GeneratedCaseInvestigationAction {
     return {
       actionType: action.actionType,
-      baseDurationMinutes: 45,
+      // Legacy field name: generated value is seconds.
+      baseDurationMinutes: DEFAULT_INVESTIGATION_ACTION_DURATION_SECONDS,
       description: action.description,
       isInitiallyAvailable: action.isInitiallyAvailable ?? false,
       metadata: {
         narrativePurpose: action.title,
+        operationalProfile: this.createOperationalProfile(action.actionType),
       },
       minimumSkillLevel: MINIMUM_INVESTIGATION_SKILL_LEVEL,
       requiredSkill: action.requiredSkill,
       requiresDetective: true,
       tempId: action.tempId,
       title: action.title,
+    };
+  }
+
+  private createOperationalProfile(
+    actionType: GeneratedCaseInvestigationAction['actionType'],
+  ): GeneratedCaseInvestigationAction['metadata']['operationalProfile'] {
+    const categoryByActionType = {
+      analyze_forensic_sample: 'forensic',
+      background_check: 'records',
+      canvass_area: 'field',
+      check_financial_records: 'records',
+      compare_fingerprints: 'forensic',
+      custom: 'custom',
+      inspect_scene: 'field',
+      interview: 'interview',
+      perform_surveillance: 'surveillance',
+      request_autopsy: 'forensic',
+      review_security_camera: 'digital',
+      search_digital_devices: 'digital',
+    } satisfies Record<
+      GeneratedCaseInvestigationAction['actionType'],
+      GeneratedCaseInvestigationAction['metadata']['operationalProfile']['category']
+    >;
+
+    return {
+      accelerationEligible: ['extra_shift'],
+      category: categoryByActionType[actionType],
+      fatiguePressure: 'medium',
+      reportQualitySensitivity: 'medium',
+      riskProfile: 'standard',
     };
   }
 
@@ -537,16 +608,26 @@ export class LocalAiContentProvider implements AiContentProvider {
   private createLocalStatementUnlockRules(
     input: GenerateCaseInvestigationGraphInput,
   ): GeneratedStatementUnlockRule[] {
-    return input.statements
-      .filter((statement) => !statement.isInitiallyVisible)
-      .map((statement) => ({
-        actionTempId: 'interview_case_circle',
-        isGuaranteed: true,
-        minimumSkillLevel: MINIMUM_INVESTIGATION_SKILL_LEVEL,
-        requiredSkill: 'interrogation',
-        statementId: statement.id,
-        successChance: 1,
-      }));
+    return input.statements.flatMap((statement) => {
+      const suspectIndex = input.suspects.findIndex(
+        (suspect) => suspect.id === statement.suspectId,
+      );
+
+      if (suspectIndex < 0) {
+        return [];
+      }
+
+      return [
+        {
+          actionTempId: `interview_suspect_${suspectIndex + 1}`,
+          isGuaranteed: true,
+          minimumSkillLevel: MINIMUM_INVESTIGATION_SKILL_LEVEL,
+          requiredSkill: 'interrogation',
+          statementId: statement.id,
+          successChance: 1,
+        },
+      ];
+    });
   }
 
   private createLocalContradictionUnlockRules(
@@ -580,18 +661,22 @@ export class LocalAiContentProvider implements AiContentProvider {
       (action) => action.tempId === 'compare_versions',
     );
 
-    return hasComparisonAction
-      ? [
-          {
-            actionTempId: 'compare_versions',
-            prerequisiteActionTempId: 'inspect_case_files',
-          },
-          {
-            actionTempId: 'compare_versions',
-            prerequisiteActionTempId: 'interview_case_circle',
-          },
-        ]
-      : [];
+    if (!hasComparisonAction) {
+      return [];
+    }
+
+    return [
+      {
+        actionTempId: 'compare_versions',
+        prerequisiteActionTempId: 'inspect_case_files',
+      },
+      ...actions
+        .filter((action) => action.actionType === 'interview')
+        .map((action) => ({
+          actionTempId: 'compare_versions',
+          prerequisiteActionTempId: action.tempId,
+        })),
+    ];
   }
 
   private createFollowUpPrerequisites(

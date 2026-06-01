@@ -7,6 +7,16 @@ import {
   normalizeAdminActionType,
 } from '../../cases/constants/admin-case.constants';
 import {
+  ACTION_OPERATIONAL_CATEGORIES,
+  INVESTIGATION_ACCELERATION_TYPES,
+  ActionOperationalCategory,
+  InvestigationAccelerationType,
+} from '../../rules/investigation-acceleration-rule.service';
+import {
+  INSTITUTIONAL_ACCESSES,
+  InstitutionalAccess,
+} from '../../rules/institutional-access-rule.service';
+import {
   readArray,
   readBoolean,
   readNumber,
@@ -14,6 +24,8 @@ import {
 import { AiProviderRequestError } from '../providers/ai-provider-request.error';
 import {
   GeneratedActionPrerequisite,
+  ActionOperationalMetadata,
+  ActionOperationalProfile,
   GeneratedCaseInvestigationAction,
   GeneratedCaseInvestigationGraphContent,
   GeneratedContradictionUnlockRule,
@@ -37,14 +49,16 @@ import {
 const MAX_TITLE_LENGTH = 160;
 const MAX_DESCRIPTION_LENGTH = 5000;
 const MAX_TEMP_ID_LENGTH = 80;
-const MIN_DURATION_MINUTES = 5;
-const MAX_DURATION_MINUTES = 480;
+const MIN_ACTION_BASE_DURATION_SECONDS = 60;
+const MAX_ACTION_BASE_DURATION_SECONDS = 600;
 const MINIMUM_SKILL_LEVEL = 50;
 const MAXIMUM_SKILL_LEVEL = 100;
 const MIN_SUCCESS_CHANCE = 0;
 const MAX_SUCCESS_CHANCE = 1;
-const DEFAULT_DURATION_MINUTES = 45;
+const DEFAULT_ACTION_BASE_DURATION_SECONDS = 210;
 const DEFAULT_OPTIONAL_SUCCESS_CHANCE = 0.7;
+const OPERATIONAL_SENSITIVITIES = ['low', 'medium', 'high'] as const;
+const RISK_PROFILES = ['standard', 'aggressive', 'political'] as const;
 export interface GeneratedCaseInvestigationGraphPayload {
   readonly actionPrerequisites?: unknown;
   readonly actions?: unknown;
@@ -55,6 +69,7 @@ export interface GeneratedCaseInvestigationGraphPayload {
 
 interface ActionPayload {
   readonly actionType?: unknown;
+  /** Legacy name expected from generated payloads; value is seconds. */
   readonly baseDurationMinutes?: unknown;
   readonly description?: unknown;
   readonly isInitiallyAvailable?: unknown;
@@ -119,9 +134,11 @@ export type InvestigationGraphValidationIssueCode =
   | 'duplicate_unlock_rule'
   | 'action_count_outside_budget'
   | 'initial_action_with_prerequisite'
+  | 'interview_action_without_single_suspect'
   | 'invalid_prerequisite_target'
   | 'mandatory_contradiction_not_guaranteed'
   | 'mandatory_evidence_not_guaranteed'
+  | 'missing_initial_suspect_interview'
   | 'non_initial_action_without_prerequisite'
   | 'self_referencing_prerequisite'
   | 'unreachable_action'
@@ -247,14 +264,20 @@ export class GeneratedCaseInvestigationGraphNormalizer {
   ): GeneratedCaseInvestigationAction {
     return {
       actionType: this.readActionType(payload.actionType),
-      baseDurationMinutes: this.readDuration(payload.baseDurationMinutes),
+      // Legacy field name: generated value is seconds.
+      baseDurationMinutes: this.readActionBaseDurationSeconds(
+        payload.baseDurationMinutes,
+      ),
       description: this.readText(
         payload.description,
         `actions[${actionIndex}].description`,
         MAX_DESCRIPTION_LENGTH,
       ),
       isInitiallyAvailable: readBoolean(payload.isInitiallyAvailable, false),
-      metadata: this.readMetadata(payload.metadata),
+      metadata: this.readMetadata(
+        payload.metadata,
+        `actions[${actionIndex}].metadata`,
+      ),
       minimumSkillLevel: this.readMinimumSkillLevel(payload.minimumSkillLevel),
       requiredSkill: this.readOptionalSkill(payload.requiredSkill),
       requiresDetective: readBoolean(payload.requiresDetective, true),
@@ -471,6 +494,8 @@ export class GeneratedCaseInvestigationGraphNormalizer {
     return [
       ...this.validateActionCount(content, input),
       ...this.validateUniqueUnlockRules(content),
+      ...this.validateInterviewActionsTargetOneSuspect(content, input, aliases),
+      ...this.validateEverySuspectHasInitialInterview(content, input, aliases),
       ...this.validateActionPrerequisiteTargets(content),
       ...this.validateNonInitialActionsHavePrerequisites(content),
       ...this.validateInitialActionsHaveNoPrerequisites(content),
@@ -939,6 +964,131 @@ export class GeneratedCaseInvestigationGraphNormalizer {
     ];
   }
 
+  private validateInterviewActionsTargetOneSuspect(
+    content: GeneratedCaseInvestigationGraphContent,
+    input: GenerateCaseInvestigationGraphInput,
+    aliases: InvestigationGraphAliasCatalog,
+  ): readonly InvestigationGraphValidationIssue[] {
+    return content.actions
+      .filter((action) => action.actionType === 'interview')
+      .flatMap((action) =>
+        this.validateInterviewActionTarget(action, content, input, aliases),
+      );
+  }
+
+  private validateInterviewActionTarget(
+    action: GeneratedCaseInvestigationAction,
+    content: GeneratedCaseInvestigationGraphContent,
+    input: GenerateCaseInvestigationGraphInput,
+    aliases: InvestigationGraphAliasCatalog,
+  ): readonly InvestigationGraphValidationIssue[] {
+    const suspectIds = this.findInterviewActionSuspectIds(
+      action.tempId,
+      content,
+      input,
+    );
+
+    if (suspectIds.size === 1) {
+      return [];
+    }
+
+    return [
+      this.createValidationIssue(
+        'interview_action_without_single_suspect',
+        this.createInterviewActionTargetMessage(action.tempId, suspectIds, aliases),
+        `actions.${action.tempId}`,
+      ),
+    ];
+  }
+
+  private validateEverySuspectHasInitialInterview(
+    content: GeneratedCaseInvestigationGraphContent,
+    input: GenerateCaseInvestigationGraphInput,
+    aliases: InvestigationGraphAliasCatalog,
+  ): readonly InvestigationGraphValidationIssue[] {
+    return input.suspects.flatMap((suspect) => {
+      if (this.hasInitialInterviewForSuspect(suspect.id, content, input)) {
+        return [];
+      }
+
+      const suspectAlias = this.findAliasOrId(aliases.suspects, suspect.id);
+
+      return [
+        this.createValidationIssue(
+          'missing_initial_suspect_interview',
+          `El sospechoso ${suspectAlias} no tiene una accion interview inicial propia. Debe existir una accion inicial actionType="interview" que desbloquee solo su declaracion.`,
+          `suspects.${suspectAlias}`,
+        ),
+      ];
+    });
+  }
+
+  private hasInitialInterviewForSuspect(
+    suspectId: string,
+    content: GeneratedCaseInvestigationGraphContent,
+    input: GenerateCaseInvestigationGraphInput,
+  ): boolean {
+    return content.actions
+      .filter(
+        (action) =>
+          action.actionType === 'interview' && action.isInitiallyAvailable,
+      )
+      .some((action) =>
+        this.findInterviewActionSuspectIds(
+          action.tempId,
+          content,
+          input,
+        ).has(suspectId),
+      );
+  }
+
+  private findInterviewActionSuspectIds(
+    actionTempId: string,
+    content: GeneratedCaseInvestigationGraphContent,
+    input: GenerateCaseInvestigationGraphInput,
+  ): ReadonlySet<string> {
+    const suspectIdByStatementId = this.createSuspectIdByStatementId(input);
+    const suspectIds = new Set<string>();
+
+    content.statementUnlockRules
+      .filter((rule) => rule.actionTempId === actionTempId)
+      .forEach((rule) => {
+        const suspectId = suspectIdByStatementId.get(rule.statementId);
+
+        if (suspectId) {
+          suspectIds.add(suspectId);
+        }
+      });
+
+    return suspectIds;
+  }
+
+  private createSuspectIdByStatementId(
+    input: GenerateCaseInvestigationGraphInput,
+  ): ReadonlyMap<string, string> {
+    return new Map(
+      input.statements
+        .filter((statement) => Boolean(statement.suspectId))
+        .map((statement) => [statement.id, statement.suspectId as string]),
+    );
+  }
+
+  private createInterviewActionTargetMessage(
+    actionTempId: string,
+    suspectIds: ReadonlySet<string>,
+    aliases: InvestigationGraphAliasCatalog,
+  ): string {
+    if (suspectIds.size === 0) {
+      return `La accion interview ${actionTempId} debe desbloquear declaraciones de exactamente un sospechoso.`;
+    }
+
+    const suspectAliases = [...suspectIds]
+      .map((suspectId) => this.findAliasOrId(aliases.suspects, suspectId))
+      .join(', ');
+
+    return `La accion interview ${actionTempId} no puede entrevistar a mas de un sospechoso; desbloquea declaraciones de ${suspectAliases}. Crea una accion interview separada por sospechoso.`;
+  }
+
   private validateUniquePairs<TRule>(
     rules: readonly TRule[],
     createKey: (rule: TRule) => string,
@@ -1373,12 +1523,12 @@ export class GeneratedCaseInvestigationGraphNormalizer {
     return value.trim().slice(0, maxLength);
   }
 
-  private readDuration(value: unknown): number {
+  private readActionBaseDurationSeconds(value: unknown): number {
     return Math.min(
-      MAX_DURATION_MINUTES,
+      MAX_ACTION_BASE_DURATION_SECONDS,
       Math.max(
-        MIN_DURATION_MINUTES,
-        this.readInteger(value, DEFAULT_DURATION_MINUTES),
+        MIN_ACTION_BASE_DURATION_SECONDS,
+        this.readInteger(value, DEFAULT_ACTION_BASE_DURATION_SECONDS),
       ),
     );
   }
@@ -1411,8 +1561,166 @@ export class GeneratedCaseInvestigationGraphNormalizer {
     return Math.round(readNumber(value, fallback));
   }
 
-  private readMetadata(value: unknown): Record<string, unknown> {
-    return this.isRecord(value) ? value : {};
+  private readMetadata(
+    value: unknown,
+    fieldPath: string,
+  ): ActionOperationalMetadata {
+    const metadata = this.readRecord(value, fieldPath);
+
+    return {
+      ...metadata,
+      operationalProfile: this.readOperationalProfile(
+        metadata.operationalProfile,
+        `${fieldPath}.operationalProfile`,
+      ),
+    };
+  }
+
+  private readOperationalProfile(
+    value: unknown,
+    fieldPath: string,
+  ): ActionOperationalProfile {
+    const profile = this.readRecord(value, fieldPath);
+
+    return {
+      accelerationEligible: this.readAccelerationTypes(
+        profile.accelerationEligible,
+        `${fieldPath}.accelerationEligible`,
+      ),
+      category: this.readOperationalCategory(profile.category, fieldPath),
+      fatiguePressure: this.readSensitivity(
+        profile.fatiguePressure,
+        `${fieldPath}.fatiguePressure`,
+      ),
+      institutionalAccess: this.readOptionalInstitutionalAccess(
+        profile.institutionalAccess,
+        `${fieldPath}.institutionalAccess`,
+      ),
+      reportQualitySensitivity: this.readSensitivity(
+        profile.reportQualitySensitivity,
+        `${fieldPath}.reportQualitySensitivity`,
+      ),
+      riskProfile: this.readOptionalRiskProfile(
+        profile.riskProfile,
+        `${fieldPath}.riskProfile`,
+      ),
+    };
+  }
+
+  private readRecord(
+    value: unknown,
+    fieldPath: string,
+  ): Record<string, unknown> {
+    if (this.isRecord(value)) {
+      return value;
+    }
+
+    throw this.createInvalidGraphError(
+      `La IA no devolvio un objeto valido para ${fieldPath}. Valor recibido: ${this.describeInvalidValue(value)}.`,
+    );
+  }
+
+  private readOperationalCategory(
+    value: unknown,
+    fieldPath: string,
+  ): ActionOperationalCategory {
+    if (
+      typeof value === 'string' &&
+      ACTION_OPERATIONAL_CATEGORIES.includes(value as ActionOperationalCategory)
+    ) {
+      return value as ActionOperationalCategory;
+    }
+
+    throw this.createInvalidGraphError(
+      `La IA devolvio una categoria operativa invalida en ${fieldPath}.category.`,
+    );
+  }
+
+  private readSensitivity(
+    value: unknown,
+    fieldPath: string,
+  ): ActionOperationalProfile['fatiguePressure'] {
+    if (
+      typeof value === 'string' &&
+      OPERATIONAL_SENSITIVITIES.includes(
+        value as ActionOperationalProfile['fatiguePressure'],
+      )
+    ) {
+      return value as ActionOperationalProfile['fatiguePressure'];
+    }
+
+    throw this.createInvalidGraphError(
+      `La IA devolvio una sensibilidad operativa invalida en ${fieldPath}.`,
+    );
+  }
+
+  private readAccelerationTypes(
+    value: unknown,
+    fieldPath: string,
+  ): readonly InvestigationAccelerationType[] {
+    const types = readArray(value).map((item) =>
+      this.readAccelerationType(item, fieldPath),
+    );
+
+    return [...new Set(types)];
+  }
+
+  private readAccelerationType(
+    value: unknown,
+    fieldPath: string,
+  ): InvestigationAccelerationType {
+    if (
+      typeof value === 'string' &&
+      INVESTIGATION_ACCELERATION_TYPES.includes(
+        value as InvestigationAccelerationType,
+      )
+    ) {
+      return value as InvestigationAccelerationType;
+    }
+
+    throw this.createInvalidGraphError(
+      `La IA devolvio un acelerador invalido en ${fieldPath}.`,
+    );
+  }
+
+  private readOptionalInstitutionalAccess(
+    value: unknown,
+    fieldPath: string,
+  ): InstitutionalAccess | undefined {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    if (
+      typeof value === 'string' &&
+      INSTITUTIONAL_ACCESSES.includes(value as InstitutionalAccess)
+    ) {
+      return value as InstitutionalAccess;
+    }
+
+    throw this.createInvalidGraphError(
+      `La IA devolvio un acceso institucional invalido en ${fieldPath}.`,
+    );
+  }
+
+  private readOptionalRiskProfile(
+    value: unknown,
+    fieldPath: string,
+  ): ActionOperationalProfile['riskProfile'] {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    if (
+      typeof value === 'string' &&
+      RISK_PROFILES.includes(value as NonNullable<ActionOperationalProfile['riskProfile']>)
+    ) {
+      return value as ActionOperationalProfile['riskProfile'];
+    }
+
+    throw this.createInvalidGraphError(
+      `La IA devolvio un perfil de riesgo invalido en ${fieldPath}.`,
+    );
   }
 
   private throwWhenValidationFails(

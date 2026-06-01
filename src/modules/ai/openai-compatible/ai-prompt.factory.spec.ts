@@ -1,4 +1,5 @@
 import {
+  GenerateAdminCaseBaseInput,
   GenerateCaseInvestigationGraphInput,
   GenerateCaseSuspectsInput,
 } from '../types/ai.types';
@@ -20,9 +21,24 @@ describe('AiPromptFactory', () => {
 
     expect(prompt).toContain('Genera exactamente 3 sospechosos');
     expect(prompt).toContain('La dificultad del caso es hard');
+    expect(prompt).toContain('Nombres obligatorios de sospechosos');
+    expect(prompt).toContain('Alicia Mora');
+    expect(prompt).toContain('no inventes nombres fuera de esa lista');
     expect(prompt).toContain('No incluyas id, caseId, createdAt');
     expect(prompt).toContain('campos extra');
     expect(prompt).toContain('"title":"Caso de prueba"');
+  });
+
+  it('builds an admin case base prompt with the required victim name pool', () => {
+    const messages = factory.buildAdminCaseBaseMessages(
+      createAdminCaseBaseInput(),
+    );
+
+    const prompt = messages[1].content;
+
+    expect(prompt).toContain('Nombre obligatorio de victima');
+    expect(prompt).toContain('Victor Ramos');
+    expect(prompt).toContain('victimName debe ser exactamente uno');
   });
 
   it('builds a compact investigation graph prompt without raw persistence noise', () => {
@@ -46,8 +62,15 @@ describe('AiPromptFactory', () => {
     expect(prompt).toContain('"suggestedUnlockAction":"inspeccionar archivo"');
     expect(prompt).toContain('inspect_scene');
     expect(prompt).toContain('analyze_forensic_sample');
+    expect(prompt).toContain(
+      'exactamente una accion inicial actionType="interview" por cada sospechoso',
+    );
+    expect(prompt).toContain(
+      'Cada accion interview debe entrevistar a un solo sospechoso',
+    );
     expect(prompt).toContain('minimumSkillLevel siempre debe ser un entero');
     expect(prompt).toContain('Nunca uses valores menores a 50');
+    expect(prompt).toContain('promedio cercano a 3-3.5 minutos');
     expect(prompt).toContain('"mandatory"');
     expect(prompt).toContain('"optional"');
     expect(prompt).not.toContain('suspect-1');
@@ -94,12 +117,24 @@ describe('AiPromptFactory', () => {
     expect(prompt).toContain('El JSON anterior tiene 1 acciones');
     expect(prompt).toContain('El JSON final debe respetar ese rango');
     expect(prompt).toContain('Prioriza agregar o corregir reglas de unlock');
+    expect(prompt).toContain(
+      'Cada sospechoso debe quedar cubierto por una accion inicial actionType="interview" propia',
+    );
     expect(prompt).toContain('La accion no inicial request_autopsy');
     expect(prompt).toContain('"tempId":"request_autopsy"');
     expect(prompt).toContain('"alias":"EV1"');
     expect(prompt).not.toContain('evidence-1');
   });
 });
+
+function createAdminCaseBaseInput(): GenerateAdminCaseBaseInput {
+  return {
+    difficulty: 'medium',
+    forbiddenTitles: ['Caso repetido'],
+    theme: 'archivo municipal',
+    victimNamePool: ['Victor Ramos'],
+  };
+}
 
 function createCaseSuspectsInput(): GenerateCaseSuspectsInput {
   return {
@@ -112,6 +147,7 @@ function createCaseSuspectsInput(): GenerateCaseSuspectsInput {
       victimName: 'Victor Ramos',
     },
     difficulty: 'hard',
+    suspectNamePool: ['Alicia Mora', 'Bruno Rivas', 'Carla Soto'],
     suspectCount: 3,
   };
 }

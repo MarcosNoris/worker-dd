@@ -40,8 +40,9 @@ describe('GeneratedCaseInvestigationGraphNormalizer', () => {
           tempId: 'inspect_case_files',
         }),
         createActionPayload({
-          actionType: 'camera_review',
+          actionType: 'interview',
           isInitiallyAvailable: true,
+          requiredSkill: 'interrogation',
           tempId: 'interview_case_circle',
         }),
         createActionPayload({
@@ -58,7 +59,7 @@ describe('GeneratedCaseInvestigationGraphNormalizer', () => {
 
     expect(content.actions.map((action) => action.actionType)).toEqual([
       'inspect_scene',
-      'review_security_camera',
+      'interview',
       'canvass_area',
       'inspect_scene',
       'inspect_scene',
@@ -128,6 +129,38 @@ describe('GeneratedCaseInvestigationGraphNormalizer', () => {
     expect(content.evidenceUnlockRules[0].minimumSkillLevel).toBe(50);
     expect(content.statementUnlockRules[0].minimumSkillLevel).toBe(50);
     expect(content.contradictionUnlockRules[0].minimumSkillLevel).toBe(50);
+  });
+
+  it('keeps generated action base durations in the playable seconds range', () => {
+    const payload = createValidPayload({
+      actions: [
+        createActionPayload({
+          baseDurationMinutes: 30,
+          isInitiallyAvailable: true,
+          tempId: 'inspect_case_files',
+        }),
+        createActionPayload({
+          actionType: 'interview',
+          baseDurationMinutes: undefined,
+          isInitiallyAvailable: true,
+          requiredSkill: 'interrogation',
+          tempId: 'interview_case_circle',
+        }),
+        createActionPayload({
+          baseDurationMinutes: 900,
+          tempId: 'compare_versions',
+        }),
+        createActionPayload({ tempId: 'follow_up_line_1' }),
+        createActionPayload({ tempId: 'follow_up_line_2' }),
+        createActionPayload({ tempId: 'follow_up_line_3' }),
+      ],
+    });
+
+    const content = normalizer.createContentFromPayload(payload, createInput());
+
+    expect(content.actions.map((action) => action.baseDurationMinutes)).toEqual(
+      [60, 210, 600, 210, 210, 210],
+    );
   });
 
   it('rejects mandatory evidence without a guaranteed route', () => {
@@ -240,6 +273,61 @@ describe('GeneratedCaseInvestigationGraphNormalizer', () => {
         expect.objectContaining({
           code: 'action_count_outside_budget',
           message: expect.stringContaining('rango permitido es 6-9'),
+        }),
+      ]),
+    );
+  });
+
+  it('reports missing initial interviews for suspects', () => {
+    const input = createInputWithSecondSuspect();
+    const content = normalizer.createNormalizedContentFromPayload(
+      createValidPayload(),
+      input,
+    );
+
+    const report = normalizer.validateContent(content, input);
+
+    expect(report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'missing_initial_suspect_interview',
+          message:
+            'El sospechoso SP2 no tiene una accion interview inicial propia. Debe existir una accion inicial actionType="interview" que desbloquee solo su declaracion.',
+        }),
+      ]),
+    );
+  });
+
+  it('rejects interview actions that target more than one suspect', () => {
+    const input = createInputWithSecondSuspect();
+    const content = normalizer.createNormalizedContentFromPayload(
+      createValidPayload({
+        statementUnlockRules: [
+          {
+            actionTempId: 'interview_case_circle',
+            isGuaranteed: true,
+            statementAlias: 'ST1',
+            successChance: 1,
+          },
+          {
+            actionTempId: 'interview_case_circle',
+            isGuaranteed: true,
+            statementAlias: 'ST2',
+            successChance: 1,
+          },
+        ],
+      }),
+      input,
+    );
+
+    const report = normalizer.validateContent(content, input);
+
+    expect(report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'interview_action_without_single_suspect',
+          message:
+            'La accion interview interview_case_circle no puede entrevistar a mas de un sospechoso; desbloquea declaraciones de SP1, SP2. Crea una accion interview separada por sospechoso.',
         }),
       ]),
     );
@@ -368,6 +456,32 @@ function createInput(): GenerateCaseInvestigationGraphInput {
   };
 }
 
+function createInputWithSecondSuspect(): GenerateCaseInvestigationGraphInput {
+  const input = createInput();
+
+  return {
+    ...input,
+    statements: [
+      ...input.statements,
+      {
+        content: 'Vi a Alicia cerca del archivo.',
+        id: 'second-statement-id',
+        isInitiallyVisible: false,
+        speakerName: 'Bruno Rivas',
+        suspectId: 'second-suspect-id',
+      },
+    ],
+    suspects: [
+      ...input.suspects,
+      {
+        createdAt: '2026-05-21T00:00:00.000Z',
+        id: 'second-suspect-id',
+        name: 'Bruno Rivas',
+      },
+    ],
+  };
+}
+
 function createValidPayload(overrides: Record<string, unknown> = {}) {
   return {
     actionPrerequisites: [
@@ -443,10 +557,18 @@ function createValidPayload(overrides: Record<string, unknown> = {}) {
 function createActionPayload(overrides: Record<string, unknown> = {}) {
   return {
     actionType: 'inspect_scene',
-    baseDurationMinutes: 45,
+    baseDurationMinutes: 210,
     description: 'Accion de investigacion.',
     isInitiallyAvailable: false,
-    metadata: {},
+    metadata: {
+      operationalProfile: {
+        accelerationEligible: ['extra_shift'],
+        category: 'field',
+        fatiguePressure: 'medium',
+        reportQualitySensitivity: 'medium',
+        riskProfile: 'standard',
+      },
+    },
     minimumSkillLevel: 50,
     requiredSkill: 'crime_scene_analysis',
     requiresDetective: true,

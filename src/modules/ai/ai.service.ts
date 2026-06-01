@@ -30,6 +30,7 @@ import {
   VerdictGenerationResult,
   VerdictInput,
 } from './types/ai.types';
+import { RandomUserNameService } from './random-user-name.service';
 
 @Injectable()
 export class AiService {
@@ -37,6 +38,7 @@ export class AiService {
     @Inject(AI_CONTENT_PROVIDER)
     private readonly contentProvider: AiContentProvider,
     private readonly detectiveProfileService: AiDetectiveProfileService,
+    private readonly randomUserNameService: RandomUserNameService,
   ) {}
 
   async generateCase(input: GenerateCaseInput): Promise<GenerateCaseResult> {
@@ -51,7 +53,9 @@ export class AiService {
   async generateAdminCaseBase(
     input: GenerateAdminCaseBaseInput,
   ): Promise<GenerateAdminCaseBaseResult> {
-    const generation = await this.contentProvider.generateAdminCaseBase(input);
+    const generationInput = await this.createAdminCaseBaseInput(input);
+    const generation =
+      await this.contentProvider.generateAdminCaseBase(generationInput);
 
     return {
       ...generation.content,
@@ -73,7 +77,9 @@ export class AiService {
   async generateCaseSuspects(
     input: GenerateCaseSuspectsInput,
   ): Promise<GenerateCaseSuspectsResult> {
-    const generation = await this.contentProvider.generateCaseSuspects(input);
+    const generationInput = await this.createCaseSuspectsInput(input);
+    const generation =
+      await this.contentProvider.generateCaseSuspects(generationInput);
 
     return {
       ...generation.content,
@@ -164,5 +170,39 @@ export class AiService {
     input: GenerateDetectiveProfileInput,
   ): Promise<GeneratedDetectiveProfile> {
     return this.detectiveProfileService.generateDetectiveProfile(input);
+  }
+
+  private async createAdminCaseBaseInput(
+    input: GenerateAdminCaseBaseInput,
+  ): Promise<GenerateAdminCaseBaseInput> {
+    return {
+      ...input,
+      victimNamePool: this.hasNames(input.victimNamePool)
+        ? input.victimNamePool
+        : await this.randomUserNameService.getNames({
+            count: 1,
+            purpose: 'victim',
+          }),
+    };
+  }
+
+  private async createCaseSuspectsInput(
+    input: GenerateCaseSuspectsInput,
+  ): Promise<GenerateCaseSuspectsInput> {
+    return {
+      ...input,
+      suspectNamePool: this.hasNames(input.suspectNamePool)
+        ? input.suspectNamePool
+        : await this.randomUserNameService.getNames({
+            count: input.suspectCount,
+            purpose: 'suspect',
+          }),
+    };
+  }
+
+  private hasNames(
+    names: readonly string[] | undefined,
+  ): names is readonly string[] {
+    return Boolean(names && names.length > 0);
   }
 }

@@ -2099,16 +2099,29 @@ function createGeneratedAction(
 ): GeneratedCaseInvestigationAction {
   return {
     actionType: 'inspect_scene',
-    baseDurationMinutes: 45,
+    baseDurationMinutes: 210,
     description: 'Accion generada por IA.',
     isInitiallyAvailable: true,
-    metadata: {},
+    metadata: createGeneratedActionMetadata(),
     minimumSkillLevel: 50,
     requiredSkill: 'crime_scene_analysis',
     requiresDetective: true,
     tempId: 'inspect_case_files',
     title: 'Revisar expediente',
     ...overrides,
+  };
+}
+
+function createGeneratedActionMetadata():
+  GeneratedCaseInvestigationAction['metadata'] {
+  return {
+    operationalProfile: {
+      accelerationEligible: ['extra_shift'],
+      category: 'field',
+      fatiguePressure: 'medium',
+      reportQualitySensitivity: 'medium',
+      riskProfile: 'standard',
+    },
   };
 }
 

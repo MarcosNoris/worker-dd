@@ -5,6 +5,7 @@ import {
   GeneratedAdminCaseBase,
   GenerateAdminCaseBaseInput,
 } from '../types/ai.types';
+import { readGeneratedNameFromPool } from './generated-name-pool.validator';
 
 const MAX_TITLE_LENGTH = 160;
 const MAX_SUMMARY_LENGTH = 2000;
@@ -30,6 +31,8 @@ export class GeneratedAdminCaseBaseNormalizer {
   ): GeneratedAdminCaseBase {
     const difficulty = this.readDifficulty(payload.difficulty, input);
 
+    const victimName = this.readVictimName(payload.victimName, input);
+
     return {
       difficulty,
       publicBriefing: this.readOptionalText({
@@ -49,11 +52,7 @@ export class GeneratedAdminCaseBaseNormalizer {
         minLength: MIN_TITLE_LENGTH,
         value: payload.title,
       }),
-      victimName: this.readOptionalText({
-        fieldName: 'victimName',
-        maxLength: MAX_SHORT_TEXT_LENGTH,
-        value: payload.victimName,
-      }),
+      victimName,
     };
   }
 
@@ -122,6 +121,34 @@ export class GeneratedAdminCaseBaseNormalizer {
     return this.readText({
       ...command,
       minLength: MIN_OPTIONAL_TEXT_LENGTH,
+    });
+  }
+
+  private readVictimName(
+    value: unknown,
+    input: GenerateAdminCaseBaseInput,
+  ): string | undefined {
+    const victimName = this.readOptionalText({
+      fieldName: 'victimName',
+      maxLength: MAX_SHORT_TEXT_LENGTH,
+      value,
+    });
+
+    if (!input.victimNamePool || input.victimNamePool.length === 0) {
+      return victimName;
+    }
+
+    if (!victimName) {
+      throw this.createInvalidCaseBaseError(
+        'La IA no devolvio victimName de la lista obligatoria.',
+      );
+    }
+
+    return readGeneratedNameFromPool({
+      errorCode: 'invalid_generated_admin_case_base',
+      fieldName: 'victimName',
+      name: victimName,
+      namePool: input.victimNamePool,
     });
   }
 

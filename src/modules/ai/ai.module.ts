@@ -24,6 +24,7 @@ import { AiProviderRotator } from './providers/ai-provider-rotator.service';
 import { AiTextGenerationClient } from './providers/ai-text-generation-client.service';
 import { ExternalAiContentProvider } from './providers/external-ai-content.provider';
 import { LocalAiContentProvider } from './providers/local-ai-content.provider';
+import { RandomUserNameService } from './random-user-name.service';
 
 @Module({
   providers: [
@@ -48,6 +49,7 @@ import { LocalAiContentProvider } from './providers/local-ai-content.provider';
     AiTextGenerationClient,
     LocalAiContentProvider,
     OpenAiCompatibleClient,
+    RandomUserNameService,
     ExternalAiContentProvider,
     {
       provide: AI_CONTENT_PROVIDER,
