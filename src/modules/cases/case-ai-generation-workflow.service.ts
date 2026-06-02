@@ -22,10 +22,10 @@ import {
 
 const MAX_ATTEMPTS_PER_STEP = 2;
 const DEFAULT_EVIDENCE_COUNT_BY_DIFFICULTY = {
-  easy: 4,
-  medium: 6,
-  hard: 8,
-  expert: 10,
+  easy: 6,
+  medium: 8,
+  hard: 10,
+  expert: 12,
 } as const satisfies Record<AdminCaseDifficulty, number>;
 
 interface CreateFullAiCaseCommand {
@@ -329,6 +329,8 @@ export class CaseAiGenerationWorkflowService {
     const finishedAt = new Date().toISOString();
 
     if (validation.canPublish) {
+      await this.casesService.publishCase(this.requireCaseId(run));
+
       return this.casesRepository.updateCaseAiGenerationRun(run.id, {
         currentStep: 'validate_playability',
         finishedAt,

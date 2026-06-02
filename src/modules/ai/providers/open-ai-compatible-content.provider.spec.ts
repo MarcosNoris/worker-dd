@@ -500,9 +500,107 @@ describe('ExternalAiContentProvider', () => {
     );
     expect(result.content.evidences).toHaveLength(2);
     expect(result.content.evidences[0].title).toBe('Registro de camaras');
+    expect(result.content.evidences[0].metadata).toEqual(
+      expect.objectContaining({
+        mandatoryCandidate: true,
+        primaryProofRole: 'identity',
+        proofRoles: ['identity'],
+      }),
+    );
+    expect(result.content.evidences[1].metadata).toEqual(
+      expect.objectContaining({
+        mandatoryCandidate: true,
+        primaryProofRole: 'motive',
+        proofRoles: ['motive'],
+      }),
+    );
     expect(result.content.solution?.culpritSuspectId).toBe(
       '22222222-2222-4222-8222-222222222222',
     );
+  });
+
+  it('normalizes evidence proof metadata into unique core roles and support extras', async () => {
+    const client = createClientMock([
+      JSON.stringify({
+        selectedCulpritSuspectId: '22222222-2222-4222-8222-222222222222',
+        evidences: [
+          createGeneratedEvidencePayload('Camara manipulada', {
+            mandatoryCandidate: true,
+            primaryProofRole: 'opportunity',
+            proofRoles: ['opportunity', 'method'],
+          }),
+          createGeneratedEvidencePayload('Motivo laboral', {
+            mandatoryCandidate: true,
+            primaryProofRole: 'motive',
+            proofRoles: ['motive'],
+          }),
+          createGeneratedEvidencePayload('Pestillo alterado', {
+            mandatoryCandidate: false,
+            primaryProofRole: 'method',
+            proofRoles: ['method'],
+          }),
+          createGeneratedEvidencePayload('Cierre anticipado', {
+            mandatoryCandidate: true,
+            primaryProofRole: 'opportunity',
+            proofRoles: ['opportunity', 'method'],
+          }),
+          createGeneratedEvidencePayload('Testimonio de Lois', {
+            mandatoryCandidate: true,
+            primaryProofRole: 'motive',
+            proofRoles: ['motive', 'identity'],
+          }),
+          createGeneratedEvidencePayload('Nota de la victima', {
+            mandatoryCandidate: true,
+            primaryProofRole: 'identity',
+            proofRoles: ['identity', 'motive'],
+          }),
+        ],
+      }),
+    ]);
+    const provider = createProvider([nvidiaRoute], client);
+
+    const result = await provider.generateCaseEvidences(
+      createGenerateCaseEvidencesInput({ evidenceCount: 6 }),
+    );
+
+    expect(result.content.evidences.map((evidence) => evidence.metadata)).toEqual([
+      expect.objectContaining({
+        mandatoryCandidate: true,
+        primaryProofRole: 'opportunity',
+        proves: 'opportunity',
+        proofRoles: ['opportunity'],
+      }),
+      expect.objectContaining({
+        mandatoryCandidate: true,
+        primaryProofRole: 'motive',
+        proves: 'motive',
+        proofRoles: ['motive'],
+      }),
+      expect.objectContaining({
+        mandatoryCandidate: true,
+        primaryProofRole: 'method',
+        proves: 'method',
+        proofRoles: ['method'],
+      }),
+      expect.objectContaining({
+        mandatoryCandidate: false,
+        primaryProofRole: 'support',
+        proves: 'support',
+        proofRoles: ['support'],
+      }),
+      expect.objectContaining({
+        mandatoryCandidate: false,
+        primaryProofRole: 'support',
+        proves: 'support',
+        proofRoles: ['support'],
+      }),
+      expect.objectContaining({
+        mandatoryCandidate: true,
+        primaryProofRole: 'identity',
+        proves: 'identity',
+        proofRoles: ['identity'],
+      }),
+    ]);
   });
 
   it('falls back to a known suspect when generated evidences use an invalid culprit id', async () => {
@@ -600,7 +698,7 @@ describe('ExternalAiContentProvider', () => {
             content:
               'No estuve cerca del archivo despues del cierre, aunque vi el registro antes.',
             context: 'Declaracion evasiva del culpable esperado.',
-            isInitiallyVisible: true,
+            isInitiallyVisible: false,
           },
           {
             suspectId: '33333333-3333-4333-8333-333333333333',
@@ -646,7 +744,7 @@ describe('ExternalAiContentProvider', () => {
           content:
             'No estuve cerca del archivo despues del cierre, aunque vi el registro antes.',
           context: 'Declaracion evasiva del culpable esperado.',
-          isInitiallyVisible: true,
+          isInitiallyVisible: false,
         },
         {
           suspectId: '33333333-3333-4333-8333-333333333333',
@@ -682,6 +780,39 @@ describe('ExternalAiContentProvider', () => {
     await expect(
       provider.generateCaseStatements(createGenerateCaseStatementsInput()),
     ).rejects.toThrow(ServiceUnavailableException);
+  });
+
+  it('locks generated statements when the provider omits visibility', async () => {
+    const client = createClientMock([
+      JSON.stringify({
+        statements: [
+          {
+            suspectId: '22222222-2222-4222-8222-222222222222',
+            speakerName: 'Alicia Mora',
+            content: 'No estuve cerca del archivo despues del cierre.',
+            context: 'Declaracion evasiva del culpable esperado.',
+          },
+          {
+            suspectId: '33333333-3333-4333-8333-333333333333',
+            speakerName: 'Bruno Rivas',
+            content: 'La ronda de seguridad termino temprano.',
+            context: 'Declaracion contextual de un sospechoso inocente.',
+            isInitiallyVisible: false,
+          },
+        ],
+      }),
+    ]);
+    const provider = createProvider([nvidiaRoute], client);
+
+    const result = await provider.generateCaseStatements(
+      createGenerateCaseStatementsInput(),
+    );
+
+    expect(result.content.statements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ isInitiallyVisible: false }),
+      ]),
+    );
   });
 
   it('throws when generated statements include invalid suspect ids', async () => {
@@ -859,11 +990,17 @@ describe('ExternalAiContentProvider', () => {
             proofRole: 'false_alibi',
             requiredContradictionId: '77777777-7777-4777-8777-777777777777',
             requirementType: 'false_alibi',
+            isMandatory: false,
           }),
           createSolveRequirementPayload({
             proofRole: 'motive',
-            requiredSuspectId: '22222222-2222-4222-8222-222222222222',
+            requiredEvidenceId: '88888888-8888-4888-8888-888888888881',
             requirementType: 'motive',
+          }),
+          createSolveRequirementPayload({
+            proofRole: 'opportunity',
+            requiredEvidenceId: '88888888-8888-4888-8888-888888888883',
+            requirementType: 'opportunity',
           }),
         ],
       }),
@@ -879,7 +1016,7 @@ describe('ExternalAiContentProvider', () => {
       '22222222-2222-4222-8222-222222222222',
     );
     expect(result.content.difficulty).toBe('medium');
-    expect(result.content.requirements).toHaveLength(4);
+    expect(result.content.requirements).toHaveLength(5);
     expect(result.content.requirements[0]).toEqual(
       expect.objectContaining({
         requirementType: 'culprit',
@@ -920,6 +1057,11 @@ describe('ExternalAiContentProvider', () => {
             requiredSuspectId: '22222222-2222-4222-8222-222222222222',
             requirementType: 'motive',
           }),
+          createSolveRequirementPayload({
+            proofRole: 'opportunity',
+            requiredSuspectId: '22222222-2222-4222-8222-222222222222',
+            requirementType: 'opportunity',
+          }),
         ],
       }),
     ]);
@@ -954,6 +1096,11 @@ describe('ExternalAiContentProvider', () => {
             requiredEvidenceId: '44444444-4444-4444-8444-444444444444',
             requirementType: 'opportunity',
           }),
+          createSolveRequirementPayload({
+            proofRole: 'method',
+            requiredEvidenceId: '44444444-4444-4444-8444-444444444444',
+            requirementType: 'method',
+          }),
         ],
       }),
     ]);
@@ -964,6 +1111,48 @@ describe('ExternalAiContentProvider', () => {
         createGenerateCaseSolveRequirementsInput(),
       ),
     ).rejects.toThrow('requisito culprit obligatorio');
+  });
+
+  it('throws when mandatory solve requirements reuse the same proof target', async () => {
+    const client = createClientMock([
+      JSON.stringify({
+        solveRequirements: [
+          createSolveRequirementPayload({
+            requirementType: 'culprit',
+            requiredSuspectId: '22222222-2222-4222-8222-222222222222',
+          }),
+          createSolveRequirementPayload({
+            proofRole: 'identity',
+            requiredEvidenceId: '44444444-4444-4444-8444-444444444444',
+            requirementType: 'identity',
+          }),
+          createSolveRequirementPayload({
+            proofRole: 'motive',
+            requiredEvidenceId: '88888888-8888-4888-8888-888888888881',
+            requirementType: 'motive',
+          }),
+          createSolveRequirementPayload({
+            proofRole: 'method',
+            requiredEvidenceId: '44444444-4444-4444-8444-444444444444',
+            requirementType: 'method',
+          }),
+          createSolveRequirementPayload({
+            proofRole: 'opportunity',
+            requiredEvidenceId: '88888888-8888-4888-8888-888888888883',
+            requirementType: 'opportunity',
+          }),
+        ],
+      }),
+    ]);
+    const provider = createProvider([nvidiaRoute], client);
+
+    await expect(
+      provider.generateCaseSolveRequirements(
+        createGenerateCaseSolveRequirementsInput(),
+      ),
+    ).rejects.toThrow(
+      'Cada evidencia o contradiccion obligatoria debe probar un solo solve requirement',
+    );
   });
 
   it('throws when generated solve requirements fall outside the difficulty range', async () => {
@@ -981,7 +1170,48 @@ describe('ExternalAiContentProvider', () => {
       provider.generateCaseSolveRequirements(
         createGenerateCaseSolveRequirementsInput({ difficulty: 'easy' }),
       ),
-    ).rejects.toThrow('rango permitido es 3-4');
+    ).rejects.toThrow('rango permitido es 5-5');
+  });
+
+  it('throws when easy solve requirements include optional requirements', async () => {
+    const client = createClientMock([
+      JSON.stringify({
+        solveRequirements: [
+          createSolveRequirementPayload({
+            requirementType: 'culprit',
+            requiredSuspectId: '22222222-2222-4222-8222-222222222222',
+          }),
+          createSolveRequirementPayload({
+            proofRole: 'identity',
+            requiredEvidenceId: '44444444-4444-4444-8444-444444444444',
+            requirementType: 'identity',
+          }),
+          createSolveRequirementPayload({
+            proofRole: 'motive',
+            requiredSuspectId: '22222222-2222-4222-8222-222222222222',
+            requirementType: 'motive',
+          }),
+          createSolveRequirementPayload({
+            proofRole: 'method',
+            requiredEvidenceId: '44444444-4444-4444-8444-444444444444',
+            requirementType: 'method',
+          }),
+          createSolveRequirementPayload({
+            isMandatory: false,
+            proofRole: 'opportunity',
+            requiredSuspectId: '22222222-2222-4222-8222-222222222222',
+            requirementType: 'opportunity',
+          }),
+        ],
+      }),
+    ]);
+    const provider = createProvider([nvidiaRoute], client);
+
+    await expect(
+      provider.generateCaseSolveRequirements(
+        createGenerateCaseSolveRequirementsInput({ difficulty: 'easy' }),
+      ),
+    ).rejects.toThrow('requisito opcional para dificultad easy');
   });
 
   it('converts a valid provider response into an investigation graph', async () => {
@@ -1272,6 +1502,24 @@ describe('ExternalAiContentProvider', () => {
     };
   }
 
+  function createGeneratedEvidencePayload(
+    title: string,
+    metadata: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      description: `${title} describe una pista relevante del caso.`,
+      discoveryHint: `Investigar ${title}.`,
+      importance: 'supporting',
+      isDecoy: false,
+      isInitiallyVisible: false,
+      location: 'Archivo central',
+      metadata,
+      title,
+      type: 'document',
+      weight: 10,
+    };
+  }
+
   function createGenerateCaseStatementsInput(
     overrides: Partial<GenerateCaseStatementsInput> = {},
   ): GenerateCaseStatementsInput {
@@ -1287,10 +1535,55 @@ describe('ExternalAiContentProvider', () => {
           importance: 'critical',
           isDecoy: false,
           isInitiallyVisible: true,
-          metadata: {},
+          metadata: {
+            primaryProofRole: 'identity',
+            proofRoles: ['identity'],
+          },
           title: 'Registro de acceso',
           type: 'digital',
           weight: 10,
+        },
+        {
+          description: 'Documento que explica el motivo de Alicia.',
+          id: '88888888-8888-4888-8888-888888888881',
+          importance: 'critical',
+          isDecoy: false,
+          isInitiallyVisible: true,
+          metadata: {
+            primaryProofRole: 'motive',
+            proofRoles: ['motive'],
+          },
+          title: 'Contrato falsificado',
+          type: 'document',
+          weight: 9,
+        },
+        {
+          description: 'Herramienta que explica el metodo usado.',
+          id: '88888888-8888-4888-8888-888888888882',
+          importance: 'critical',
+          isDecoy: false,
+          isInitiallyVisible: true,
+          metadata: {
+            primaryProofRole: 'method',
+            proofRoles: ['method'],
+          },
+          title: 'Herramienta alterada',
+          type: 'physical',
+          weight: 8,
+        },
+        {
+          description: 'Turno que prueba la ventana de oportunidad.',
+          id: '88888888-8888-4888-8888-888888888883',
+          importance: 'supporting',
+          isDecoy: false,
+          isInitiallyVisible: true,
+          metadata: {
+            primaryProofRole: 'opportunity',
+            proofRoles: ['opportunity'],
+          },
+          title: 'Registro de turnos',
+          type: 'document',
+          weight: 7,
         },
       ],
       suspects: evidenceInput.suspects,

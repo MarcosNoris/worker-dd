@@ -55,8 +55,8 @@ const CONTRADICTION_LIMITS_BY_DIFFICULTY = {
   expert: '5 a 7',
 } as const;
 const REQUIREMENT_LIMITS_BY_DIFFICULTY = {
-  easy: '3 o 4',
-  medium: '4 a 6',
+  easy: '5',
+  medium: '5 o 6',
   hard: '6 a 8',
   expert: '8 a 10',
 } as const;
@@ -91,7 +91,11 @@ interface InvestigationGraphPromptContext {
     readonly isDecoy: boolean;
     readonly isInitiallyVisible: boolean;
     readonly location?: string;
+    readonly mandatoryCandidate?: boolean;
     readonly narrativePurpose?: string;
+    readonly primaryProofRole?: string;
+    readonly proofRationale?: string;
+    readonly proofRoles?: readonly string[];
     readonly relatedSuspectAliases?: readonly string[];
     readonly suggestedUnlockAction?: string;
     readonly title: string;
@@ -197,9 +201,15 @@ export class AiPromptFactory {
           `Tipos permitidos: ${ADMIN_EVIDENCE_TYPES.join(', ')}.`,
           `Importancias permitidas: ${ADMIN_EVIDENCE_IMPORTANCES.join(', ')}.`,
           'Debe existir al menos una evidencia critical. Usa misleading solo para pistas distractoras razonables.',
+          'Crea una matriz probatoria minima: al menos una evidencia no distractora para identity, una para motive, una para method y una para opportunity. Estas cuatro evidencias deben ser distintas entre si.',
+          'Las evidencias restantes deben ser support o decoy: apoyo contextual, descarte de inocentes, pista distractora razonable o profundidad narrativa. No las marques como mandatoryCandidate salvo que sean parte de la matriz minima.',
+          'metadata.primaryProofRole debe ser exactamente uno de identity, motive, method, opportunity, support o false_alibi. metadata.proofRoles debe incluir ese rol principal y no debe mezclar dos roles obligatorios en la misma evidencia.',
+          'metadata.mandatoryCandidate debe ser true solo para una evidencia principal de identity, motive, method u opportunity; debe ser false para support o decoy.',
+          'metadata.proofRationale debe explicar en una frase que requisito prueba esa evidencia y por que. Para identity debe conectar al sospechoso con ser autor del delito; para method debe explicar como se hizo; para motive debe explicar incentivo; para opportunity debe explicar acceso, presencia o ventana temporal.',
+          'Debe existir al menos una evidencia no distractora relacionada con el culpable que pruebe su motivo real. Su description, metadata.proofRationale y metadata.narrativePurpose deben explicar por que ese sospechoso tenia incentivo para cometer el delito.',
           'Devuelve solo un objeto JSON, no un array raiz, con selectedCulpritSuspectId, evidences y, si se solicita, solution.',
           'Cada evidencia debe incluir title, description, type, importance, location, discoveryHint, weight, isDecoy, isInitiallyVisible y metadata.',
-          'metadata debe incluir relatedSuspectIds, relatedSuspectNames, proves, narrativePurpose y suggestedUnlockAction cuando aplique.',
+          'metadata debe incluir relatedSuspectIds, relatedSuspectNames, proves, primaryProofRole, proofRoles, mandatoryCandidate, proofRationale, narrativePurpose y suggestedUnlockAction cuando aplique.',
           `Caso: ${JSON.stringify(input.caseData)}.`,
           `Sospechosos: ${JSON.stringify(input.suspects)}.`,
         ].join(' '),
@@ -285,6 +295,7 @@ export class AiPromptFactory {
           `Roles permitidos para proves: ${ADMIN_PROOF_ROLES.join(', ')}.`,
           'Devuelve solo un objeto JSON, no un array raiz, con la forma exacta {"contradictions":[]}.',
           'Cada contradiccion debe incluir suspectId, statementId, refutingEvidenceId, title, explanation, proves e isInitiallyVisible.',
+          'isInitiallyVisible debe ser siempre false: las contradicciones se descubren por deduccion cuando el jugador conoce la declaracion y la evidencia refutadora.',
           'No incluyas metadata ni campos extra.',
           `Caso: ${JSON.stringify(input.caseData)}.`,
           `Sospechosos: ${JSON.stringify(input.suspects)}.`,
@@ -310,6 +321,7 @@ export class AiPromptFactory {
           'La solucion debe explicar quien cometio el crimen, por que lo hizo, como lo hizo y cuando tuvo oportunidad.',
           'No inventes sospechosos, evidencias, statements ni contradicciones. No cambies el caso base.',
           'Apoya motivo, metodo y oportunidad en evidencias, statements y contradicciones existentes.',
+          'Cada afirmacion fuerte de metodo u oportunidad debe estar respaldada por una evidencia, statement o contradiccion existente. Si una causa, complice, herramienta o ruta de ejecucion no esta probada por el contexto, redactala como hipotesis limitada y no como hecho oficial.',
           'Usa contradicciones existentes para explicar mentiras, omisiones o coartadas falsas cuando aporten a la solucion.',
           'No escribas una confesion directa si no existe un statement que la sostenga.',
           'No culpes a otro sospechoso ni dejes ambigua la identidad del culpable.',
@@ -339,15 +351,29 @@ export class AiPromptFactory {
           'Genera requisitos estructurados para que el caso pueda considerarse solucionado.',
           `Nivel de dificultad: ${input.difficulty}. Genera ${REQUIREMENT_LIMITS_BY_DIFFICULTY[input.difficulty]} requisitos.`,
           `El culpable esperado es ${input.culpritSuspectId}; debe existir un requisito culprit obligatorio con requiredSuspectId igual a ese id.`,
+          'Debe existir exactamente un requisito obligatorio para cada clave logica minima: culprit, method, motive, opportunity e identity.',
+          'El requisito culprit no cuenta como identity aunque tenga proofRole identity; identity debe ser otro requisito obligatorio separado.',
+          'Si la dificultad es easy, los 5 requisitos deben ser obligatorios y exactamente las claves culprit, identity, motive, method y opportunity. No generes requisitos opcionales en easy.',
+          'Los requisitos extra deben ser opcionales o usar una clave logica distinta; no dupliques proofRole obligatorio.',
+          'Un requisito motive obligatorio nunca debe usar solo requiredSuspectId. Debe apuntar a requiredEvidenceId o requiredContradictionId.',
+          'La prueba del requisito motive obligatorio debe explicar el incentivo concreto del culpable: beneficio economico, venganza, presion, chantaje, miedo, encubrimiento u otra causa narrativa clara. Identificar al culpable no cuenta como probar motivo.',
+          'Un requisito opportunity obligatorio debe probar la oportunidad del culpable, no la coartada de un sospechoso inocente.',
+          'No uses evidencias isDecoy true como requisitos obligatorios.',
+          'Cada evidencia o contradiccion obligatoria debe probar exactamente un solve requirement. No reutilices el mismo requiredEvidenceId ni el mismo requiredContradictionId en dos requisitos obligatorios distintos.',
+          'Para requiredEvidenceId, el proofRole del requisito debe coincidir con metadata.primaryProofRole o estar incluido en metadata.proofRoles de esa evidencia.',
+          'Para requiredContradictionId, el proofRole del requisito debe coincidir con contradiction.proves.',
+          'No conviertas evidencias que solo descartan inocentes en requisitos obligatorios, especialmente en casos easy.',
+          'Las contradicciones obligatorias deben estar asociadas al culpable o refutar una declaracion del culpable.',
           'No inventes sospechosos, evidencias, statements, contradicciones ni cambies la solucion privada.',
           'Cada requisito debe tener al menos un objetivo verificable: requiredSuspectId, requiredEvidenceId o requiredContradictionId.',
           'No uses requiredStatementId porque el DTO no lo permite.',
           `Tipos de requisito permitidos: ${ADMIN_REQUIREMENT_TYPES.join(', ')}.`,
           `Roles probatorios permitidos: ${ADMIN_PROOF_ROLES.join(', ')}.`,
           'Usa solo IDs existentes en el contexto recibido.',
-          'No uses evidencias isDecoy true como requisito obligatorio central salvo para descartar una pista enganosa.',
+          'Las pruebas de descarte de pistas enganosas deben ser opcionales con proofRole support.',
           'Devuelve solo un objeto JSON, no un array raiz, con la forma exacta {"solveRequirements":[]}.',
           'Cada requisito debe incluir requirementType, description, weight e isMandatory; puede incluir proofRole, requiredSuspectId, requiredEvidenceId y requiredContradictionId.',
+          'Ejemplo de estructura valida para easy: {"solveRequirements":[{"requirementType":"culprit","description":"Identificar al culpable esperado.","proofRole":"identity","requiredSuspectId":"ID_CULPABLE","weight":100,"isMandatory":true},{"requirementType":"identity","description":"Probar que la evidencia conecta al culpable con el crimen.","proofRole":"identity","requiredEvidenceId":"ID_EVIDENCIA_IDENTIDAD","weight":90,"isMandatory":true},{"requirementType":"motive","description":"Probar el motivo concreto del culpable.","proofRole":"motive","requiredEvidenceId":"ID_EVIDENCIA_MOTIVO","weight":90,"isMandatory":true},{"requirementType":"method","description":"Probar el metodo usado.","proofRole":"method","requiredEvidenceId":"ID_EVIDENCIA_METODO","weight":85,"isMandatory":true},{"requirementType":"opportunity","description":"Probar la oportunidad del culpable.","proofRole":"opportunity","requiredEvidenceId":"ID_EVIDENCIA_OPORTUNIDAD","weight":80,"isMandatory":true}]}',
           'No incluyas metadata ni campos extra.',
           `Caso: ${JSON.stringify(input.caseData)}.`,
           `Sospechosos: ${JSON.stringify(input.suspects)}.`,
@@ -395,6 +421,8 @@ export class AiPromptFactory {
           'baseDurationMinutes conserva el nombre historico, pero debe contener segundos: usa normalmente 180-210 segundos para un promedio cercano a 3-3.5 minutos y nunca superes 600 segundos.',
           'Debe existir al menos una accion inicial. Toda accion no inicial debe tener al menos un prerequisito.',
           'Debe existir exactamente una accion inicial actionType="interview" por cada sospechoso del dossier.',
+          'actionType="interview" es exclusivo para entrevistas iniciales a sospechosos que desbloquean statements de sospechosos mediante statementUnlockRules.',
+          'No uses actionType="interview" para testigos, personal de limpieza, guardias, terceros, busquedas de campo ni confrontaciones; usa canvass_area o custom segun corresponda.',
           'Cada accion interview debe entrevistar a un solo sospechoso: no agrupes dos o mas sospechosos en una misma accion.',
           'Cada entrevista inicial debe desbloquear mediante statementUnlockRules la declaracion del sospechoso que entrevista, y no declaraciones de otros sospechosos.',
           'Ninguna declaracion puede tratarse como inicial: todos los statements del dossier deben desbloquearse mediante statementUnlockRules desde acciones actionType="interview".',
@@ -402,10 +430,11 @@ export class AiPromptFactory {
           'actionPrerequisites usa actionTempId y exactamente uno entre prerequisiteActionTempId, prerequisiteEvidenceAlias o prerequisiteContradictionAlias.',
           'Cada evidencia no visible inicialmente debe tener una regla en evidenceUnlockRules.',
           'Cada declaracion debe tener una regla en statementUnlockRules apuntando a una accion interview.',
-          'Cada contradiccion no visible inicialmente debe tener una regla en contradictionUnlockRules.',
+          'Las contradicciones no deben ser inicialmente visibles. El jugador debe poder deducirlas cuando descubra la declaracion y la evidencia refutadora relacionadas; contradictionUnlockRules es un soporte legacy/contextual, no la regla fuerte de descubrimiento.',
           'Las evidencias y contradicciones usadas por requisitos obligatorios deben desbloquearse con isGuaranteed true y successChance 1.',
           'Los statements y evidencias que sostienen contradicciones obligatorias tambien deben tener ruta garantizada.',
-          'Las contradicciones no deben aparecer magicamente: su accion debe estar disponible solo cuando ya sea posible descubrir la evidencia refutadora y la declaracion relacionada.',
+          'Si incluyes contradictionUnlockRules, su accion debe estar disponible solo cuando ya sea posible descubrir la evidencia refutadora y la declaracion relacionada.',
+          'Una accion que desbloquea una contradiccion nunca puede depender de esa misma contradiccion; usa como prerequisitos la entrevista del sospechoso y la evidencia refutadora.',
           'Puedes usar successChance menor a 1 solo para hallazgos secundarios, pistas falsas o contenido no obligatorio.',
           'Devuelve solo JSON con esta forma exacta: {"actions":[],"evidenceUnlockRules":[],"statementUnlockRules":[],"contradictionUnlockRules":[],"actionPrerequisites":[]}.',
           'Formato de regla: evidenceUnlockRules[] usa actionTempId, evidenceAlias, requiredSkill, minimumSkillLevel, durationModifierMinutes, isGuaranteed y successChance; statementUnlockRules[] usa actionTempId, statementAlias, requiredSkill, minimumSkillLevel, isGuaranteed y successChance; contradictionUnlockRules[] usa actionTempId, contradictionAlias, requiredSkill, minimumSkillLevel, isGuaranteed y successChance.',
@@ -439,6 +468,7 @@ export class AiPromptFactory {
           'Recibiras el dossier compacto, el JSON anterior generado por IA y los errores exactos encontrados por el backend.',
           'Devuelve el JSON completo corregido con la misma forma exacta: {"actions":[],"evidenceUnlockRules":[],"statementUnlockRules":[],"contradictionUnlockRules":[],"actionPrerequisites":[]}.',
           'No devuelvas diff, markdown, explicaciones ni campos extra.',
+          `Errores detectados que debes corregir primero: ${JSON.stringify(command.validationReport.issues)}.`,
           `${describeInvestigationGraphActionBudget(actionBudget)} El JSON anterior tiene ${previousActionCount} acciones. El JSON final debe respetar ese rango exactamente.`,
           'Preserva todo lo valido del JSON anterior y cambia solo lo necesario para corregir los errores.',
           'Prioriza agregar o corregir reglas de unlock sobre acciones existentes antes de crear acciones nuevas.',
@@ -446,9 +476,11 @@ export class AiPromptFactory {
           'Si una accion no inicial no tiene prerequisitos, agregale un prerequisito logico o marcala como inicial solo si narrativamente corresponde.',
           'Si una evidencia, declaracion o contradiccion no queda descubierta, agrega o ajusta reglas y prerequisitos hasta que tenga ruta desde acciones iniciales.',
           'Cada sospechoso debe quedar cubierto por una accion inicial actionType="interview" propia, y cada accion interview debe apuntar a un solo sospechoso mediante statementUnlockRules.',
+          'actionType="interview" solo sirve para entrevistas iniciales a sospechosos; para testigos, personal de limpieza, guardias, terceros o confrontaciones usa canvass_area o custom.',
           'Todas las declaraciones deben permanecer bloqueadas al inicio y desbloquearse solo mediante statementUnlockRules de acciones actionType="interview".',
           'Las reglas de statementUnlockRules deben ser garantizadas: isGuaranteed true y successChance 1.',
           'Las contradicciones deben desbloquearse solo cuando su statement y evidencia refutadora ya puedan descubrirse.',
+          'Una accion que desbloquea una contradiccion nunca puede depender de esa misma contradiccion; reemplaza ese prerequisito por la entrevista del sospechoso y la evidencia refutadora.',
           'Las evidencias y contradicciones de requisitos obligatorios deben tener ruta garantizada con isGuaranteed true y successChance 1.',
           'Usa solo aliases existentes del dossier como SP1, EV1, ST1, CT1 y REQ1. No inventes IDs reales.',
           'Los actionTempId y prerequisiteActionTempId deben coincidir textualmente con un actions[].tempId del JSON final.',
@@ -459,7 +491,6 @@ export class AiPromptFactory {
           'Cada accion V1 debe conservar metadata.operationalProfile valido: category, reportQualitySensitivity, fatiguePressure, accelerationEligible y opcionalmente institutionalAccess/riskProfile.',
           'No agregues costos, budget, reputacion, recompensas ni resultados garantizados por aceleradores en el JSON; esas reglas las calcula el backend.',
           `Dossier compacto: ${JSON.stringify(promptContext)}.`,
-          `Errores detectados: ${JSON.stringify(command.validationReport.issues)}.`,
           `JSON anterior: ${JSON.stringify(command.previousPayload)}.`,
         ].join(' '),
       ),
@@ -629,9 +660,25 @@ export class AiPromptFactory {
         isDecoy: evidence.isDecoy,
         isInitiallyVisible: evidence.isInitiallyVisible,
         location: this.compactOptionalText(evidence.location),
+        mandatoryCandidate: this.readMetadataBoolean(
+          evidence.metadata,
+          'mandatoryCandidate',
+        ),
         narrativePurpose: this.readMetadataText(
           evidence.metadata,
           'narrativePurpose',
+        ),
+        primaryProofRole: this.readMetadataText(
+          evidence.metadata,
+          'primaryProofRole',
+        ),
+        proofRationale: this.readMetadataText(
+          evidence.metadata,
+          'proofRationale',
+        ),
+        proofRoles: this.readMetadataStringArray(
+          evidence.metadata,
+          'proofRoles',
         ),
         relatedSuspectAliases: this.readRelatedSuspectAliases(
           evidence.metadata,
@@ -759,6 +806,32 @@ export class AiPromptFactory {
     return typeof value === 'string'
       ? this.compactOptionalText(value)
       : undefined;
+  }
+
+  private readMetadataBoolean(
+    metadata: Record<string, unknown>,
+    key: string,
+  ): boolean | undefined {
+    const value = metadata[key];
+
+    return typeof value === 'boolean' ? value : undefined;
+  }
+
+  private readMetadataStringArray(
+    metadata: Record<string, unknown>,
+    key: string,
+  ): string[] | undefined {
+    const value = metadata[key];
+
+    if (!Array.isArray(value)) {
+      return undefined;
+    }
+
+    const items = value.filter(
+      (item): item is string => typeof item === 'string',
+    );
+
+    return items.length > 0 ? items : undefined;
   }
 
   private readMetadataTextList(

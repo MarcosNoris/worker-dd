@@ -57,6 +57,7 @@ export interface AdminCaseStateResponseDto {
   readonly progress: AdminCaseProgressDto;
   readonly publishability: AdminCasePublishabilityDto;
   readonly status: string;
+  readonly version: number;
 }
 
 interface PendingCaseProcess {
@@ -99,6 +100,7 @@ export function createAdminCaseStateResponse(
       warnings: validation.warnings,
     },
     status: snapshot.caseRecord.status,
+    version: snapshot.caseRecord.version ?? 0,
   };
 }
 

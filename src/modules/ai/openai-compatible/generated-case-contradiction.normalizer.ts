@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { readBoolean } from '../../../shared/utils/value.util';
 import {
   ADMIN_PROOF_ROLES,
   AdminProofRole,
@@ -66,7 +65,7 @@ export class GeneratedCaseContradictionNormalizer {
         'explanation',
         MAX_EXPLANATION_LENGTH,
       ),
-      isInitiallyVisible: readBoolean(payload.isInitiallyVisible, false),
+      isInitiallyVisible: false,
       proves: this.readProofRole(payload.proves),
       refutingEvidenceId,
       statementId: statement.id,

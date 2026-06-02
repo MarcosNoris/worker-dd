@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import {
   ADMIN_EVIDENCE_IMPORTANCES,
   ADMIN_EVIDENCE_TYPES,
+  ADMIN_PROOF_ROLES,
+  AdminProofRole,
 } from '../../cases/constants/admin-case.constants';
 import {
   readArray,
@@ -21,6 +23,12 @@ const MAX_TITLE_LENGTH = 160;
 const MAX_DESCRIPTION_LENGTH = 5000;
 const MAX_LOCATION_LENGTH = 300;
 const MAX_HINT_LENGTH = 1000;
+const CORE_EVIDENCE_PROOF_ROLES = [
+  'identity',
+  'motive',
+  'method',
+  'opportunity',
+] as const satisfies readonly AdminProofRole[];
 
 export interface GeneratedCaseEvidencesPayload {
   readonly evidences?: unknown;
@@ -66,7 +74,9 @@ export class GeneratedCaseEvidenceNormalizer {
         this.createEvidence(evidence, evidenceIndex, context),
       );
 
-    return this.withFallbackEvidences(evidences, context);
+    return this.normalizeEvidenceProofMatrix(
+      this.withFallbackEvidences(evidences, context),
+    );
   }
 
   private createEvidence(
@@ -81,6 +91,9 @@ export class GeneratedCaseEvidenceNormalizer {
       ADMIN_EVIDENCE_IMPORTANCES,
       fallback.importance,
     );
+    const isDecoy =
+      importance === 'misleading' ||
+      readBoolean(payload.isDecoy, fallback.isDecoy);
 
     return {
       description: this.readText(
@@ -94,9 +107,7 @@ export class GeneratedCaseEvidenceNormalizer {
         MAX_HINT_LENGTH,
       ),
       importance,
-      isDecoy:
-        importance === 'misleading' ||
-        readBoolean(payload.isDecoy, fallback.isDecoy),
+      isDecoy,
       isInitiallyVisible: readBoolean(
         payload.isInitiallyVisible,
         fallback.isInitiallyVisible,
@@ -106,7 +117,10 @@ export class GeneratedCaseEvidenceNormalizer {
         fallback.location,
         MAX_LOCATION_LENGTH,
       ),
-      metadata: this.createMetadata(payload.metadata, fallback.metadata),
+      metadata: this.createMetadata(payload.metadata, fallback.metadata, {
+        evidenceIndex,
+        isDecoy,
+      }),
       title: this.readText(payload.title, fallback.title, MAX_TITLE_LENGTH),
       type: readEnumValue(payload.type, ADMIN_EVIDENCE_TYPES, fallback.type),
       weight: this.readWeight(payload.weight, fallback.weight),
@@ -190,6 +204,142 @@ export class GeneratedCaseEvidenceNormalizer {
     return completedEvidences.slice(0, context.input.evidenceCount);
   }
 
+  private normalizeEvidenceProofMatrix(
+    evidences: readonly GeneratedCaseEvidence[],
+  ): readonly GeneratedCaseEvidence[] {
+    const assignedCoreRoles = this.assignCoreProofRoles(evidences);
+
+    return evidences.map((evidence, evidenceIndex) =>
+      this.normalizeEvidenceProofMetadata(
+        evidence,
+        assignedCoreRoles.get(evidenceIndex),
+      ),
+    );
+  }
+
+  private assignCoreProofRoles(
+    evidences: readonly GeneratedCaseEvidence[],
+  ): ReadonlyMap<number, AdminProofRole> {
+    const assignedCoreRoles = new Map<number, AdminProofRole>();
+
+    for (const coreRole of CORE_EVIDENCE_PROOF_ROLES) {
+      const evidenceIndex = this.findEvidenceIndexForCoreRole(
+        evidences,
+        coreRole,
+        assignedCoreRoles,
+      );
+
+      if (evidenceIndex >= 0) {
+        assignedCoreRoles.set(evidenceIndex, coreRole);
+      }
+    }
+
+    return assignedCoreRoles;
+  }
+
+  private findEvidenceIndexForCoreRole(
+    evidences: readonly GeneratedCaseEvidence[],
+    coreRole: AdminProofRole,
+    assignedCoreRoles: ReadonlyMap<number, AdminProofRole>,
+  ): number {
+    return (
+      this.findEvidenceIndexByPrimaryRole(
+        evidences,
+        coreRole,
+        assignedCoreRoles,
+      ) ??
+      this.findEvidenceIndexByDeclaredRole(
+        evidences,
+        coreRole,
+        assignedCoreRoles,
+      ) ??
+      this.findUnassignedNonDecoyEvidenceIndex(evidences, assignedCoreRoles) ??
+      -1
+    );
+  }
+
+  private findEvidenceIndexByPrimaryRole(
+    evidences: readonly GeneratedCaseEvidence[],
+    coreRole: AdminProofRole,
+    assignedCoreRoles: ReadonlyMap<number, AdminProofRole>,
+  ): number | undefined {
+    const evidenceIndex = evidences.findIndex(
+      (evidence, candidateIndex) =>
+        !assignedCoreRoles.has(candidateIndex) &&
+        !evidence.isDecoy &&
+        evidence.metadata.primaryProofRole === coreRole,
+    );
+
+    return evidenceIndex >= 0 ? evidenceIndex : undefined;
+  }
+
+  private findEvidenceIndexByDeclaredRole(
+    evidences: readonly GeneratedCaseEvidence[],
+    coreRole: AdminProofRole,
+    assignedCoreRoles: ReadonlyMap<number, AdminProofRole>,
+  ): number | undefined {
+    const evidenceIndex = evidences.findIndex(
+      (evidence, candidateIndex) =>
+        !assignedCoreRoles.has(candidateIndex) &&
+        !evidence.isDecoy &&
+        this.hasDeclaredProofRole(evidence.metadata.proofRoles, coreRole),
+    );
+
+    return evidenceIndex >= 0 ? evidenceIndex : undefined;
+  }
+
+  private hasDeclaredProofRole(
+    value: unknown,
+    coreRole: AdminProofRole,
+  ): boolean {
+    return Array.isArray(value)
+      ? value.some((proofRole) => this.readProofRole(proofRole) === coreRole)
+      : false;
+  }
+
+  private findUnassignedNonDecoyEvidenceIndex(
+    evidences: readonly GeneratedCaseEvidence[],
+    assignedCoreRoles: ReadonlyMap<number, AdminProofRole>,
+  ): number | undefined {
+    const evidenceIndex = evidences.findIndex(
+      (evidence, candidateIndex) =>
+        !assignedCoreRoles.has(candidateIndex) && !evidence.isDecoy,
+    );
+
+    return evidenceIndex >= 0 ? evidenceIndex : undefined;
+  }
+
+  private normalizeEvidenceProofMetadata(
+    evidence: GeneratedCaseEvidence,
+    assignedCoreRole?: AdminProofRole,
+  ): GeneratedCaseEvidence {
+    const primaryProofRole =
+      assignedCoreRole ?? this.resolveExtraEvidenceProofRole(evidence);
+    const shouldKeepRationale =
+      this.readProofRole(evidence.metadata.primaryProofRole) ===
+      primaryProofRole;
+
+    return {
+      ...evidence,
+      metadata: {
+        ...evidence.metadata,
+        mandatoryCandidate: Boolean(assignedCoreRole),
+        primaryProofRole,
+        proofRationale: shouldKeepRationale
+          ? this.readProofRationale(evidence.metadata, primaryProofRole)
+          : this.createProofRationale(primaryProofRole),
+        proofRoles: [primaryProofRole],
+        proves: primaryProofRole,
+      },
+    };
+  }
+
+  private resolveExtraEvidenceProofRole(
+    evidence: GeneratedCaseEvidence,
+  ): AdminProofRole {
+    return evidence.isDecoy ? 'false_alibi' : 'support';
+  }
+
   private getFallbackEvidence(
     evidenceIndex: number,
     context: NormalizationContext,
@@ -211,7 +361,12 @@ export class GeneratedCaseEvidenceNormalizer {
       isDecoy: false,
       isInitiallyVisible: evidenceIndex === 0,
       metadata: {
+        mandatoryCandidate: evidenceIndex < CORE_EVIDENCE_PROOF_ROLES.length,
         narrativePurpose: 'Completar la estructura minima de evidencias.',
+        primaryProofRole: this.resolveFallbackProofRole(evidenceIndex),
+        proofRationale:
+          'Evidencia de respaldo generada para conservar la matriz probatoria minima.',
+        proofRoles: [this.resolveFallbackProofRole(evidenceIndex)],
         relatedSuspectIds: [context.selectedCulpritSuspectId],
       },
       title: `Evidencia generada ${evidenceIndex + 1}`,
@@ -223,8 +378,85 @@ export class GeneratedCaseEvidenceNormalizer {
   private createMetadata(
     value: unknown,
     fallback: Record<string, unknown>,
+    context: EvidenceMetadataContext,
   ): Record<string, unknown> {
-    return this.isRecord(value) ? value : fallback;
+    const metadata = this.isRecord(value) ? value : fallback;
+    const primaryProofRole = this.readPrimaryProofRole(metadata, context);
+
+    return {
+      ...metadata,
+      mandatoryCandidate:
+        typeof metadata.mandatoryCandidate === 'boolean'
+          ? metadata.mandatoryCandidate
+          : !context.isDecoy &&
+            context.evidenceIndex < CORE_EVIDENCE_PROOF_ROLES.length,
+      primaryProofRole,
+      proofRationale: this.readProofRationale(metadata, primaryProofRole),
+      proofRoles: this.readProofRoles(metadata, primaryProofRole),
+    };
+  }
+
+  private readPrimaryProofRole(
+    metadata: Record<string, unknown>,
+    context: EvidenceMetadataContext,
+  ): AdminProofRole {
+    return (
+      this.readProofRole(metadata.primaryProofRole) ??
+      this.readFirstProofRole(metadata.proofRoles) ??
+      this.resolveFallbackProofRole(context.evidenceIndex)
+    );
+  }
+
+  private readProofRoles(
+    metadata: Record<string, unknown>,
+    primaryProofRole: AdminProofRole,
+  ): readonly AdminProofRole[] {
+    const proofRoles = Array.isArray(metadata.proofRoles)
+      ? metadata.proofRoles
+          .map((proofRole) => this.readProofRole(proofRole))
+          .filter((proofRole): proofRole is AdminProofRole =>
+            Boolean(proofRole),
+          )
+      : [];
+
+    return proofRoles.includes(primaryProofRole)
+      ? proofRoles
+      : [primaryProofRole, ...proofRoles];
+  }
+
+  private readFirstProofRole(value: unknown): AdminProofRole | undefined {
+    if (!Array.isArray(value)) {
+      return undefined;
+    }
+
+    return value
+      .map((proofRole) => this.readProofRole(proofRole))
+      .find((proofRole): proofRole is AdminProofRole => Boolean(proofRole));
+  }
+
+  private readProofRole(value: unknown): AdminProofRole | undefined {
+    return typeof value === 'string' &&
+      ADMIN_PROOF_ROLES.includes(value as AdminProofRole)
+      ? (value as AdminProofRole)
+      : undefined;
+  }
+
+  private readProofRationale(
+    metadata: Record<string, unknown>,
+    primaryProofRole: AdminProofRole,
+  ): string {
+    return typeof metadata.proofRationale === 'string' &&
+      metadata.proofRationale.trim().length > 0
+      ? metadata.proofRationale.trim()
+      : this.createProofRationale(primaryProofRole);
+  }
+
+  private createProofRationale(primaryProofRole: AdminProofRole): string {
+    return `Esta evidencia funciona principalmente como prueba de ${primaryProofRole}.`;
+  }
+
+  private resolveFallbackProofRole(evidenceIndex: number): AdminProofRole {
+    return CORE_EVIDENCE_PROOF_ROLES[evidenceIndex] ?? 'support';
   }
 
   private readText(
@@ -279,4 +511,9 @@ interface NormalizationContext {
   readonly fallback: GeneratedCaseEvidencesContent;
   readonly input: GenerateCaseEvidencesInput;
   readonly selectedCulpritSuspectId: string;
+}
+
+interface EvidenceMetadataContext {
+  readonly evidenceIndex: number;
+  readonly isDecoy: boolean;
 }

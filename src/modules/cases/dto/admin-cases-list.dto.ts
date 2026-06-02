@@ -46,6 +46,7 @@ export interface AdminCaseListItemDto {
   readonly summary: string;
   readonly title: string;
   readonly updatedAt: string;
+  readonly version: number;
   readonly victimName?: string;
 }
 
@@ -104,6 +105,7 @@ function createAdminCaseListItem(
     summary: caseRecord.summary,
     title: caseRecord.title,
     updatedAt: caseRecord.updatedAt,
+    version: caseRecord.version ?? 0,
     victimName: caseRecord.victimName,
   };
 }

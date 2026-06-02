@@ -42,6 +42,7 @@ import {
   VerdictInput,
 } from '../types/ai.types';
 import { createInvestigationGraphActionBudget } from '../openai-compatible/investigation-graph-action-budget';
+import type { AdminProofRole } from '../../cases/constants/admin-case.constants';
 import { AiContentProvider } from './ai-content-provider.interface';
 
 const DEFAULT_CASE_LOCATION = 'Distrito Central, DEP City';
@@ -50,6 +51,12 @@ const MAX_ADMIN_CASE_TITLE_LENGTH = 160;
 const MINIMUM_REASONING_LENGTH = 15;
 const MINIMUM_INVESTIGATION_SKILL_LEVEL = 50;
 const DEFAULT_INVESTIGATION_ACTION_DURATION_SECONDS = 210;
+const LOCAL_CORE_EVIDENCE_PROOF_ROLES: readonly AdminProofRole[] = [
+  'identity',
+  'motive',
+  'method',
+  'opportunity',
+] as const;
 type LocalSuspectRole = 'principal' | 'testigo' | 'beneficiaria';
 
 interface LocalSuspectProfile {
@@ -88,7 +95,7 @@ interface GeneratedEvidenceDraft {
   readonly isDecoy?: boolean;
   readonly isInitiallyVisible?: boolean;
   readonly location?: string;
-  readonly proves: readonly string[];
+  readonly proves: AdminProofRole;
   readonly relatedSuspect?: CaseEvidenceGenerationSuspectContext;
   readonly title: string;
   readonly type: GeneratedCaseEvidence['type'];
@@ -706,10 +713,33 @@ export class LocalAiContentProvider implements AiContentProvider {
         description:
           'Identificar al culpable correcto segun la solucion privada.',
         isMandatory: true,
-        proofRole: 'identity',
         requiredSuspectId: input.culpritSuspectId,
         requirementType: 'culprit',
         weight: 5,
+      },
+      {
+        description: 'Reconstruir el metodo real con la evidencia disponible.',
+        isMandatory: true,
+        proofRole: 'method',
+        requiredEvidenceId: evidence.id,
+        requirementType: 'method',
+        weight: 3,
+      },
+      {
+        description: 'Explicar el motivo real usando la solucion privada.',
+        isMandatory: true,
+        proofRole: 'motive',
+        requiredSuspectId: input.culpritSuspectId,
+        requirementType: 'motive',
+        weight: 3,
+      },
+      {
+        description: 'Explicar la oportunidad real del culpable.',
+        isMandatory: true,
+        proofRole: 'opportunity',
+        requiredSuspectId: input.culpritSuspectId,
+        requirementType: 'opportunity',
+        weight: 3,
       },
       {
         description: `Vincular la teoria del caso con la evidencia "${evidence.title}".`,
@@ -721,37 +751,11 @@ export class LocalAiContentProvider implements AiContentProvider {
       },
       {
         description: `Detectar la contradiccion clave "${contradiction.title}".`,
-        isMandatory: true,
-        proofRole: 'contradiction',
+        isMandatory: false,
+        proofRole: 'support',
         requiredContradictionId: contradiction.id,
         requirementType: 'contradiction',
-        weight: 4,
-      },
-      {
-        description: 'Explicar el motivo real usando la solucion privada.',
-        isMandatory: input.difficulty !== 'easy',
-        proofRole: 'motive',
-        requiredSuspectId: input.culpritSuspectId,
-        requirementType: 'motive',
-        weight: 3,
-      },
-      {
-        description: 'Explicar la oportunidad real con una prueba existente.',
-        isMandatory:
-          input.difficulty === 'hard' || input.difficulty === 'expert',
-        proofRole: 'opportunity',
-        requiredEvidenceId: evidence.id,
-        requirementType: 'opportunity',
-        weight: 3,
-      },
-      {
-        description: 'Reconstruir el metodo real con la evidencia disponible.',
-        isMandatory:
-          input.difficulty === 'hard' || input.difficulty === 'expert',
-        proofRole: 'method',
-        requiredEvidenceId: evidence.id,
-        requirementType: 'method',
-        weight: 3,
+        weight: 2,
       },
       {
         description: 'Usar la contradiccion para romper una version falsa.',
@@ -778,8 +782,8 @@ export class LocalAiContentProvider implements AiContentProvider {
     input: GenerateCaseSolveRequirementsInput,
   ): number {
     const counts = {
-      easy: 3,
-      medium: 4,
+      easy: 5,
+      medium: 6,
       hard: 6,
       expert: 8,
     } satisfies Record<
@@ -992,7 +996,7 @@ export class LocalAiContentProvider implements AiContentProvider {
       importance: 'critical',
       input,
       location: 'Control de acceso principal',
-      proves: ['identity', 'opportunity'],
+      proves: 'identity',
       title: `Registro de acceso de ${culprit.name}`,
       type: 'digital',
       weight: 10,
@@ -1010,7 +1014,7 @@ export class LocalAiContentProvider implements AiContentProvider {
       importance: 'supporting',
       input,
       location: 'Archivo administrativo',
-      proves: ['motive'],
+      proves: 'motive',
       title: `Documento de presion sobre ${culprit.name}`,
       type: 'document',
       weight: 7,
@@ -1028,7 +1032,7 @@ export class LocalAiContentProvider implements AiContentProvider {
       importance: 'critical',
       input,
       location: 'Laboratorio forense',
-      proves: ['method'],
+      proves: 'method',
       title: 'Patron tecnico del metodo usado',
       type: 'forensic',
       weight: 9,
@@ -1046,7 +1050,7 @@ export class LocalAiContentProvider implements AiContentProvider {
       importance: 'supporting',
       input,
       location: 'Mapa de movimientos',
-      proves: ['opportunity'],
+      proves: 'opportunity',
       title: 'Ventana temporal sin supervision',
       type: 'location',
       weight: 6,
@@ -1063,7 +1067,7 @@ export class LocalAiContentProvider implements AiContentProvider {
       input,
       isInitiallyVisible: true,
       location: 'Expediente inicial',
-      proves: ['support'],
+      proves: 'support',
       title: 'Nota contextual del expediente',
       type: 'document',
       weight: 3,
@@ -1083,7 +1087,7 @@ export class LocalAiContentProvider implements AiContentProvider {
       input,
       isDecoy: true,
       location: 'Escena secundaria',
-      proves: ['support'],
+      proves: 'false_alibi',
       relatedSuspect: decoySuspect,
       title: `Pista ambigua sobre ${decoySuspect.name}`,
       type: 'physical',
@@ -1105,7 +1109,11 @@ export class LocalAiContentProvider implements AiContentProvider {
       isInitiallyVisible: draft.isInitiallyVisible ?? false,
       location: draft.location,
       metadata: {
-        narrativePurpose: `Conecta el caso ${draft.input.caseData.title} con ${draft.proves.join(', ')}.`,
+        mandatoryCandidate: this.isLocalCoreEvidenceProofRole(draft.proves),
+        narrativePurpose: `Conecta el caso ${draft.input.caseData.title} con ${draft.proves}.`,
+        primaryProofRole: draft.proves,
+        proofRationale: `Esta evidencia funciona principalmente como prueba de ${draft.proves}.`,
+        proofRoles: [draft.proves],
         proves: draft.proves,
         relatedSuspectIds: [relatedSuspect.id],
         relatedSuspectNames: [relatedSuspect.name],
@@ -1117,6 +1125,10 @@ export class LocalAiContentProvider implements AiContentProvider {
       type: draft.type,
       weight: draft.weight,
     };
+  }
+
+  private isLocalCoreEvidenceProofRole(proofRole: AdminProofRole): boolean {
+    return LOCAL_CORE_EVIDENCE_PROOF_ROLES.includes(proofRole);
   }
 
   private createGeneratedSolution(

@@ -19,6 +19,7 @@ import {
   CaseAiGenerationStatus,
   CaseAiGenerationStep,
 } from './types/case-ai-generation.types';
+import { CURRENT_CASE_VERSION } from '../rules/case-version-rule.service';
 
 const CASE_SELECT = `
   id,
@@ -28,6 +29,7 @@ const CASE_SELECT = `
   public_briefing,
   victim_name,
   difficulty,
+  version,
   status,
   generated_by_ai,
   generation_prompt,
@@ -210,6 +212,7 @@ export interface AdminCaseRecord {
   readonly summary: string;
   readonly title: string;
   readonly updatedAt: string;
+  readonly version?: number;
   readonly victimName?: string;
 }
 
@@ -415,6 +418,7 @@ export interface CreateAiGeneratedCaseRecordCommand {
   readonly publicBriefing?: string;
   readonly summary: string;
   readonly title: string;
+  readonly version?: number;
   readonly victimName?: string;
 }
 
@@ -428,6 +432,7 @@ interface CreateCaseRecordCommand {
   readonly publicBriefing?: string;
   readonly summary: string;
   readonly title: string;
+  readonly version?: number;
   readonly victimName?: string;
 }
 
@@ -677,6 +682,7 @@ interface CaseRecord {
   readonly summary?: unknown;
   readonly title?: unknown;
   readonly updated_at?: unknown;
+  readonly version?: unknown;
   readonly victim_name?: unknown;
 }
 
@@ -1521,7 +1527,8 @@ export class CasesRepository {
         .from('cases')
         .select('id', { count: 'exact', head: true })
         .eq('status', PLAYABLE_CASE_STATUS)
-        .eq('difficulty', query.difficulty),
+        .eq('difficulty', query.difficulty)
+        .eq('version', CURRENT_CASE_VERSION),
       query.excludedCaseIds,
     );
 
@@ -1545,7 +1552,8 @@ export class CasesRepository {
         .from('cases')
         .select(CASE_SELECT)
         .eq('status', PLAYABLE_CASE_STATUS)
-        .eq('difficulty', query.difficulty),
+        .eq('difficulty', query.difficulty)
+        .eq('version', CURRENT_CASE_VERSION),
       query.excludedCaseIds,
     );
 
@@ -2020,6 +2028,7 @@ export class CasesRepository {
       status: 'draft',
       summary: command.summary,
       title: command.title,
+      version: command.version ?? CURRENT_CASE_VERSION,
       victim_name: command.victimName,
     });
   }
@@ -2433,6 +2442,11 @@ export class CasesRepository {
         record.updated_at,
         'El caso no incluye fecha de actualizacion valida.',
       ),
+      version:
+        this.readOptionalNumber(
+          record.version,
+          'El caso no incluye version valida.',
+        ) ?? 0,
       victimName: this.readOptionalText(
         record.victim_name,
         'El caso no incluye victima valida.',

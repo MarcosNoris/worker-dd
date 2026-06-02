@@ -20,8 +20,8 @@ const REQUIREMENT_COUNT_BY_DIFFICULTY: Record<
   AdminCaseDifficulty,
   { readonly max: number; readonly min: number }
 > = {
-  easy: { min: 3, max: 4 },
-  medium: { min: 4, max: 6 },
+  easy: { min: 5, max: 5 },
+  medium: { min: 5, max: 6 },
   hard: { min: 6, max: 8 },
   expert: { min: 8, max: 10 },
 };
@@ -55,7 +55,10 @@ export class GeneratedCaseSolveRequirementNormalizer {
     const requirements = payloadRequirements.map((requirement) =>
       this.createRequirement(requirement, input),
     );
+    this.ensureEasyRequirementsAreMandatory(requirements, input.difficulty);
     this.ensureCulpritRequirementExists(requirements, input);
+    this.ensureMandatoryProofTargetsAreUnique(requirements);
+    this.ensureMandatoryTargetsMatchDeclaredProofRoles(requirements, input);
 
     return {
       culpritSuspectId: input.culpritSuspectId,
@@ -257,6 +260,153 @@ export class GeneratedCaseSolveRequirementNormalizer {
         `La IA no devolvio un requisito culprit obligatorio para ${input.culpritSuspectId}.`,
       );
     }
+  }
+
+  private ensureEasyRequirementsAreMandatory(
+    requirements: readonly GeneratedCaseSolveRequirement[],
+    difficulty: AdminCaseDifficulty,
+  ): void {
+    if (difficulty !== 'easy') {
+      return;
+    }
+
+    const optionalRequirement = requirements.find(
+      (requirement) => !requirement.isMandatory,
+    );
+
+    if (optionalRequirement) {
+      throw this.createInvalidRequirementsError(
+        `La IA devolvio un requisito opcional para dificultad easy: ${optionalRequirement.description}.`,
+      );
+    }
+  }
+
+  private ensureMandatoryProofTargetsAreUnique(
+    requirements: readonly GeneratedCaseSolveRequirement[],
+  ): void {
+    const mandatoryTargets = new Map<string, GeneratedCaseSolveRequirement>();
+
+    for (const requirement of requirements) {
+      if (!requirement.isMandatory) {
+        continue;
+      }
+
+      const targetKey = this.createProofTargetKey(requirement);
+
+      if (!targetKey) {
+        continue;
+      }
+
+      const previousRequirement = mandatoryTargets.get(targetKey);
+
+      if (previousRequirement) {
+        throw this.createInvalidRequirementsError(
+          `La IA reutilizo el mismo objetivo obligatorio para "${this.createProofKey(previousRequirement)}" y "${this.createProofKey(requirement)}". Cada evidencia o contradiccion obligatoria debe probar un solo solve requirement.`,
+        );
+      }
+
+      mandatoryTargets.set(targetKey, requirement);
+    }
+  }
+
+  private ensureMandatoryTargetsMatchDeclaredProofRoles(
+    requirements: readonly GeneratedCaseSolveRequirement[],
+    input: GenerateCaseSolveRequirementsInput,
+  ): void {
+    for (const requirement of requirements) {
+      if (!requirement.isMandatory || requirement.requirementType === 'culprit') {
+        continue;
+      }
+
+      const proofKey = this.createProofKey(requirement);
+
+      if (requirement.requiredEvidenceId) {
+        this.ensureEvidenceMatchesProofRole(requirement, input, proofKey);
+      }
+
+      if (requirement.requiredContradictionId) {
+        this.ensureContradictionMatchesProofRole(requirement, input, proofKey);
+      }
+    }
+  }
+
+  private ensureEvidenceMatchesProofRole(
+    requirement: GeneratedCaseSolveRequirement,
+    input: GenerateCaseSolveRequirementsInput,
+    proofKey: string,
+  ): void {
+    const evidence = input.evidences.find(
+      (candidate) => candidate.id === requirement.requiredEvidenceId,
+    );
+    const proofRoles = this.readEvidenceProofRoles(evidence?.metadata);
+
+    if (proofRoles.includes(proofKey)) {
+      return;
+    }
+
+    throw this.createInvalidRequirementsError(
+      `El requisito obligatorio "${requirement.description}" usa una evidencia que no declara metadata.primaryProofRole/proofRoles para "${proofKey}".`,
+    );
+  }
+
+  private ensureContradictionMatchesProofRole(
+    requirement: GeneratedCaseSolveRequirement,
+    input: GenerateCaseSolveRequirementsInput,
+    proofKey: string,
+  ): void {
+    const contradiction = input.contradictions.find(
+      (candidate) => candidate.id === requirement.requiredContradictionId,
+    );
+
+    if (contradiction?.proves === proofKey) {
+      return;
+    }
+
+    throw this.createInvalidRequirementsError(
+      `El requisito obligatorio "${requirement.description}" usa una contradiccion que declara proves="${contradiction?.proves ?? 'unknown'}", no "${proofKey}".`,
+    );
+  }
+
+  private createProofTargetKey(
+    requirement: GeneratedCaseSolveRequirement,
+  ): string | undefined {
+    if (requirement.requiredEvidenceId) {
+      return `evidence:${requirement.requiredEvidenceId}`;
+    }
+
+    if (requirement.requiredContradictionId) {
+      return `contradiction:${requirement.requiredContradictionId}`;
+    }
+
+    return undefined;
+  }
+
+  private createProofKey(
+    requirement: GeneratedCaseSolveRequirement,
+  ): AdminProofRole | AdminRequirementType {
+    if (requirement.requirementType === 'culprit') {
+      return 'culprit';
+    }
+
+    return requirement.proofRole ?? requirement.requirementType;
+  }
+
+  private readEvidenceProofRoles(
+    metadata: Record<string, unknown> | undefined,
+  ): readonly string[] {
+    if (!metadata) {
+      return [];
+    }
+
+    const proofRoles = Array.isArray(metadata.proofRoles)
+      ? metadata.proofRoles.filter(
+          (proofRole): proofRole is string => typeof proofRole === 'string',
+        )
+      : [];
+
+    return typeof metadata.primaryProofRole === 'string'
+      ? [metadata.primaryProofRole, ...proofRoles]
+      : proofRoles;
   }
 
   private readDescription(value: unknown): string {

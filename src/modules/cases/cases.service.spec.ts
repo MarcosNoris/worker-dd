@@ -13,6 +13,7 @@ import {
   GeneratedCaseSuspect,
 } from '../ai/types/ai.types';
 import { CasePlayabilityValidator } from './case-playability.validator';
+import { CaseSolveRequirementLogicValidator } from './case-solve-requirement-logic.validator';
 import {
   AdminActionPrerequisiteRecord,
   AdminCaseRecord,
@@ -129,7 +130,7 @@ describe('CasesService', () => {
     service = new CasesService(
       aiService as unknown as AiService,
       repository as unknown as CasesRepository,
-      new CasePlayabilityValidator(),
+      new CasePlayabilityValidator(new CaseSolveRequirementLogicValidator()),
     );
   });
 
@@ -769,8 +770,9 @@ describe('CasesService', () => {
           }),
         ],
         contradictionUnlockRules: [createContradictionUnlockRule()],
+        evidences: createCoreEvidences(),
         evidenceUnlockRules: [createEvidenceUnlockRule()],
-        requirements: [createRequirement()],
+        requirements: createCoreRequirements(),
         statementUnlockRules: [
           createStatementUnlockRule({
             actionId: 'interview-first-suspect-id',
@@ -819,9 +821,9 @@ describe('CasesService', () => {
       expect.objectContaining({
         actions: { count: 3, hasItems: true },
         contradictions: { count: 1, hasItems: true },
-        evidences: { count: 1, hasItems: true },
+        evidences: { count: 4, hasItems: true },
         solution: { count: 1, hasItems: true },
-        solveRequirements: { count: 1, hasItems: true },
+        solveRequirements: { count: 5, hasItems: true },
         statements: { count: 2, hasItems: true },
         suspects: { count: 2, hasItems: true },
       }),
@@ -855,7 +857,7 @@ describe('CasesService', () => {
     });
   });
 
-  it('marks initially visible statements as blocking issues', async () => {
+  it('marks incomplete V2 proof matrix as blocking issues', async () => {
     repository.findPlayabilitySnapshot.mockResolvedValue(
       createPlayabilitySnapshot({
         actions: [
@@ -881,9 +883,7 @@ describe('CasesService', () => {
           }),
         ],
         statements: [
-          createStatement({
-            isInitiallyVisible: true,
-          }),
+          createStatement(),
           createStatement({
             id: 'second-statement-id',
             speakerName: 'Bruno Rios',
@@ -905,7 +905,7 @@ describe('CasesService', () => {
     expect(response.currentProcess.code).toBe('resolve_blocking_issues');
     expect(response.publishability.blockingIssues).toEqual(
       expect.arrayContaining([
-        expect.stringContaining('no puede ser inicialmente visible'),
+        expect.stringContaining('matriz probatoria'),
       ]),
     );
   });
@@ -1958,6 +1958,33 @@ function createEvidence(
   };
 }
 
+function createCoreEvidences(): AdminEvidenceRecord[] {
+  return [
+    createCoreEvidence('identity', 'evidence-id'),
+    createCoreEvidence('motive', 'evidence-motive-id'),
+    createCoreEvidence('method', 'evidence-method-id'),
+    createCoreEvidence('opportunity', 'evidence-opportunity-id'),
+  ];
+}
+
+function createCoreEvidence(
+  proofRole: 'identity' | 'motive' | 'method' | 'opportunity',
+  id: string,
+): AdminEvidenceRecord {
+  return createEvidence({
+    id,
+    metadata: {
+      mandatoryCandidate: true,
+      primaryProofRole: proofRole,
+      proofRationale: `Prueba principal de ${proofRole}.`,
+      proofRoles: [proofRole],
+      proves: proofRole,
+      relatedSuspectIds: ['suspect-id'],
+    },
+    title: `Evidencia ${proofRole}`,
+  });
+}
+
 function createGeneratedEvidence(
   overrides: Partial<GeneratedCaseEvidence> = {},
 ): GeneratedCaseEvidence {
@@ -2034,6 +2061,36 @@ function createRequirement(
     weight: 10,
     ...overrides,
   };
+}
+
+function createCoreRequirements(): AdminSolveRequirementRecord[] {
+  return [
+    createRequirement({
+      description: 'Identificar al culpable.',
+      id: 'requirement-culprit-id',
+      proofRole: undefined,
+      requiredSuspectId: 'suspect-id',
+      requirementType: 'culprit',
+    }),
+    createProofRequirement('identity', 'evidence-id'),
+    createProofRequirement('motive', 'evidence-motive-id'),
+    createProofRequirement('method', 'evidence-method-id'),
+    createProofRequirement('opportunity', 'evidence-opportunity-id'),
+  ];
+}
+
+function createProofRequirement(
+  proofRole: 'identity' | 'motive' | 'method' | 'opportunity',
+  requiredEvidenceId: string,
+): AdminSolveRequirementRecord {
+  return createRequirement({
+    description: `Probar ${proofRole}.`,
+    id: `requirement-${proofRole}-id`,
+    proofRole,
+    requiredEvidenceId,
+    requiredSuspectId: undefined,
+    requirementType: proofRole,
+  });
 }
 
 function createGeneratedSolution(

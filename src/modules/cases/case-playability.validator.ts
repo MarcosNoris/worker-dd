@@ -1,15 +1,28 @@
 import { Injectable } from '@nestjs/common';
 import {
+  ADMIN_CASE_DIFFICULTIES,
+  AdminCaseDifficulty,
+  AdminProofRole,
+} from './constants/admin-case.constants';
+import { CaseSolveRequirementLogicValidator } from './case-solve-requirement-logic.validator';
+import {
   AdminActionPrerequisiteRecord,
   AdminContradictionRecord,
   AdminEvidenceRecord,
   AdminInvestigationActionRecord,
   AdminSolveRequirementRecord,
   AdminStatementRecord,
+  AdminStatementUnlockRuleRecord,
   CasePlayabilitySnapshot,
 } from './cases.repository';
 
 const MINIMUM_SUSPECTS = 2;
+const CORE_EVIDENCE_PROOF_ROLES = [
+  'identity',
+  'motive',
+  'method',
+  'opportunity',
+] as const satisfies readonly AdminProofRole[];
 
 export interface CasePlayabilityValidation {
   readonly blockingIssues: readonly string[];
@@ -33,14 +46,18 @@ interface MutableReachableCaseState {
 
 @Injectable()
 export class CasePlayabilityValidator {
+  constructor(
+    private readonly caseSolveRequirementLogicValidator: CaseSolveRequirementLogicValidator,
+  ) {}
+
   validate(snapshot: CasePlayabilitySnapshot): CasePlayabilityValidation {
     const blockingIssues = [
       ...this.validateSolution(snapshot),
       ...this.validateMinimumContent(snapshot),
+      ...this.validateRequirementLogic(snapshot),
       ...this.validateContradictions(snapshot),
-      ...this.validateStatementDiscoveryRules(snapshot),
-      ...this.validateInterviewActions(snapshot),
       ...this.validateActionPrerequisites(snapshot),
+      ...this.validateInvestigationGraphMechanics(snapshot),
       ...this.validateMandatoryRequirements(snapshot),
       ...this.validateReachableActions(snapshot),
       ...this.validateReachableContent(snapshot),
@@ -73,6 +90,7 @@ export class CasePlayabilityValidator {
     return [
       ...this.validateMinimumSuspects(snapshot),
       ...this.validateCriticalEvidence(snapshot),
+      ...this.validateEvidenceProofMatrix(snapshot),
       ...this.validateInitialActions(snapshot),
       ...this.validateRequirements(snapshot),
     ];
@@ -94,6 +112,199 @@ export class CasePlayabilityValidator {
       : ['El caso necesita al menos una evidencia critica.'];
   }
 
+  private validateEvidenceProofMatrix(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return [
+      ...this.validateEvidenceCoreRoleDeclarations(snapshot.evidences),
+      ...this.validatePrimaryEvidenceCoreRoles(snapshot.evidences),
+    ];
+  }
+
+  private validateEvidenceCoreRoleDeclarations(
+    evidences: readonly AdminEvidenceRecord[],
+  ): readonly string[] {
+    return evidences.flatMap((evidence) =>
+      this.validateEvidenceCoreRoleDeclaration(evidence),
+    );
+  }
+
+  private validateEvidenceCoreRoleDeclaration(
+    evidence: AdminEvidenceRecord,
+  ): readonly string[] {
+    const declaredCoreRoles = this.readDeclaredEvidenceCoreRoles(evidence);
+    const primaryCoreRole = this.readPrimaryEvidenceCoreRole(evidence);
+
+    return [
+      ...this.validateEvidenceHasSingleCoreRole(evidence, declaredCoreRoles),
+      ...this.validateExtraEvidenceHasNoCoreRole(
+        evidence,
+        declaredCoreRoles,
+        primaryCoreRole,
+      ),
+      ...this.validateMandatoryCandidateMatchesCoreRole(
+        evidence,
+        primaryCoreRole,
+      ),
+      ...this.validateDecoyHasNoCoreRole(evidence, primaryCoreRole),
+    ];
+  }
+
+  private validateEvidenceHasSingleCoreRole(
+    evidence: AdminEvidenceRecord,
+    declaredCoreRoles: readonly AdminProofRole[],
+  ): readonly string[] {
+    return declaredCoreRoles.length <= 1
+      ? []
+      : [
+          `La evidencia "${evidence.title}" declara multiples roles core (${declaredCoreRoles.join(', ')}). Cada evidencia debe conservar como maximo un rol core.`,
+        ];
+  }
+
+  private validateExtraEvidenceHasNoCoreRole(
+    evidence: AdminEvidenceRecord,
+    declaredCoreRoles: readonly AdminProofRole[],
+    primaryCoreRole?: AdminProofRole,
+  ): readonly string[] {
+    return primaryCoreRole || declaredCoreRoles.length === 0
+      ? []
+      : [
+          `La evidencia "${evidence.title}" declara un rol core en proofRoles/proves, pero su primaryProofRole no ocupa la matriz. Las evidencias extra deben quedar como support o false_alibi.`,
+        ];
+  }
+
+  private validateMandatoryCandidateMatchesCoreRole(
+    evidence: AdminEvidenceRecord,
+    primaryCoreRole?: AdminProofRole,
+  ): readonly string[] {
+    return this.isMandatoryCandidateEvidence(evidence) && !primaryCoreRole
+      ? [
+          `La evidencia "${evidence.title}" tiene mandatoryCandidate=true pero no ocupa un rol core unico; las evidencias extra deben quedar como support o false_alibi.`,
+        ]
+      : [];
+  }
+
+  private validateDecoyHasNoCoreRole(
+    evidence: AdminEvidenceRecord,
+    primaryCoreRole?: AdminProofRole,
+  ): readonly string[] {
+    return evidence.isDecoy && primaryCoreRole
+      ? [
+          `La evidencia distractora "${evidence.title}" no puede ocupar el rol core "${primaryCoreRole}". Debe quedar como false_alibi o support.`,
+        ]
+      : [];
+  }
+
+  private validatePrimaryEvidenceCoreRoles(
+    evidences: readonly AdminEvidenceRecord[],
+  ): readonly string[] {
+    const primaryEvidencesByRole =
+      this.groupPrimaryEvidencesByCoreRole(evidences);
+
+    return CORE_EVIDENCE_PROOF_ROLES.flatMap((coreRole) =>
+      this.validatePrimaryEvidenceCoreRole(
+        coreRole,
+        primaryEvidencesByRole.get(coreRole) ?? [],
+      ),
+    );
+  }
+
+  private validatePrimaryEvidenceCoreRole(
+    coreRole: AdminProofRole,
+    primaryEvidences: readonly AdminEvidenceRecord[],
+  ): readonly string[] {
+    if (primaryEvidences.length === 0) {
+      return [
+        `La matriz probatoria del estado no tiene una evidencia principal para "${coreRole}".`,
+      ];
+    }
+
+    return primaryEvidences.length === 1
+      ? []
+      : [
+          `La matriz probatoria declara ${primaryEvidences.length} evidencias principales para "${coreRole}": ${primaryEvidences.map((evidence) => `"${evidence.title}"`).join(', ')}. Solo una evidencia puede ocupar cada rol core; las restantes deben ser support o false_alibi.`,
+        ];
+  }
+
+  private groupPrimaryEvidencesByCoreRole(
+    evidences: readonly AdminEvidenceRecord[],
+  ): ReadonlyMap<AdminProofRole, readonly AdminEvidenceRecord[]> {
+    return evidences.reduce(
+      (groups, evidence) =>
+        this.addPrimaryEvidenceToCoreRoleGroup(groups, evidence),
+      new Map<AdminProofRole, AdminEvidenceRecord[]>(),
+    );
+  }
+
+  private addPrimaryEvidenceToCoreRoleGroup(
+    groups: Map<AdminProofRole, AdminEvidenceRecord[]>,
+    evidence: AdminEvidenceRecord,
+  ): Map<AdminProofRole, AdminEvidenceRecord[]> {
+    const primaryCoreRole = this.readPrimaryEvidenceCoreRole(evidence);
+
+    if (!primaryCoreRole) {
+      return groups;
+    }
+
+    groups.set(primaryCoreRole, [
+      ...(groups.get(primaryCoreRole) ?? []),
+      evidence,
+    ]);
+
+    return groups;
+  }
+
+  private readDeclaredEvidenceCoreRoles(
+    evidence: AdminEvidenceRecord,
+  ): readonly AdminProofRole[] {
+    return this.uniqueProofRoles([
+      this.readCoreProofRole(evidence.metadata.primaryProofRole),
+      ...this.readCoreProofRoles(evidence.metadata.proofRoles),
+      ...this.readCoreProofRoles(evidence.metadata.proves),
+    ]);
+  }
+
+  private readPrimaryEvidenceCoreRole(
+    evidence: AdminEvidenceRecord,
+  ): AdminProofRole | undefined {
+    return this.readCoreProofRole(evidence.metadata.primaryProofRole);
+  }
+
+  private readCoreProofRoles(value: unknown): readonly AdminProofRole[] {
+    return Array.isArray(value)
+      ? value
+          .map((item) => this.readCoreProofRole(item))
+          .filter((item): item is AdminProofRole => Boolean(item))
+      : [this.readCoreProofRole(value)].filter(
+          (item): item is AdminProofRole => Boolean(item),
+        );
+  }
+
+  private readCoreProofRole(value: unknown): AdminProofRole | undefined {
+    return typeof value === 'string' &&
+      this.isCoreEvidenceProofRole(value)
+      ? value
+      : undefined;
+  }
+
+  private uniqueProofRoles(
+    proofRoles: readonly (AdminProofRole | undefined)[],
+  ): readonly AdminProofRole[] {
+    return [...new Set(proofRoles.filter(Boolean))] as readonly AdminProofRole[];
+  }
+
+  private isCoreEvidenceProofRole(
+    proofRole: string,
+  ): proofRole is AdminProofRole {
+    return (CORE_EVIDENCE_PROOF_ROLES as readonly string[]).includes(
+      proofRole,
+    );
+  }
+
+  private isMandatoryCandidateEvidence(evidence: AdminEvidenceRecord): boolean {
+    return evidence.metadata.mandatoryCandidate === true;
+  }
+
   private validateInitialActions(
     snapshot: CasePlayabilitySnapshot,
   ): readonly string[] {
@@ -108,6 +319,23 @@ export class CasePlayabilityValidator {
     return this.getMandatoryRequirements(snapshot).length > 0
       ? []
       : ['El caso necesita al menos un requisito obligatorio de resolucion.'];
+  }
+
+  private validateRequirementLogic(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    if (!snapshot.solution) {
+      return [];
+    }
+
+    return this.caseSolveRequirementLogicValidator.validate({
+      contradictions: snapshot.contradictions,
+      culpritSuspectId: snapshot.solution.culpritSuspectId,
+      difficulty: this.readCaseDifficulty(snapshot.caseRecord.difficulty),
+      evidences: snapshot.evidences,
+      requirements: snapshot.requirements,
+      statements: snapshot.statements,
+    });
   }
 
   private validateContradictions(
@@ -150,115 +378,6 @@ export class CasePlayabilityValidator {
         ];
   }
 
-  private validateStatementDiscoveryRules(
-    snapshot: CasePlayabilitySnapshot,
-  ): readonly string[] {
-    return [
-      ...this.validateStatementsStartLocked(snapshot),
-      ...this.validateStatementUnlockRuleReferences(snapshot),
-      ...this.validateStatementUnlockRulesUseInterviews(snapshot),
-      ...this.validateStatementUnlockRulesAreGuaranteed(snapshot),
-      ...this.validateEveryStatementHasInterviewUnlock(snapshot),
-    ];
-  }
-
-  private validateStatementsStartLocked(
-    snapshot: CasePlayabilitySnapshot,
-  ): readonly string[] {
-    return snapshot.statements
-      .filter((statement) => statement.isInitiallyVisible)
-      .map(
-        (statement) =>
-          `La declaracion de "${statement.speakerName}" no puede ser inicialmente visible; debe desbloquearse por entrevista.`,
-      );
-  }
-
-  private validateStatementUnlockRuleReferences(
-    snapshot: CasePlayabilitySnapshot,
-  ): readonly string[] {
-    return snapshot.statementUnlockRules.flatMap((rule) => [
-      ...(this.hasAction(snapshot, rule.actionId)
-        ? []
-        : [
-            `La regla de declaracion "${rule.id}" apunta a una accion fuera del caso.`,
-          ]),
-      ...(this.hasStatement(snapshot, rule.statementId)
-        ? []
-        : [
-            `La regla de declaracion "${rule.id}" apunta a una declaracion fuera del caso.`,
-          ]),
-    ]);
-  }
-
-  private validateStatementUnlockRulesUseInterviews(
-    snapshot: CasePlayabilitySnapshot,
-  ): readonly string[] {
-    return snapshot.statementUnlockRules
-      .filter((rule) => !this.isInterviewAction(snapshot, rule.actionId))
-      .map(
-        (rule) =>
-          `La regla de declaracion "${rule.id}" debe usar una accion de entrevista.`,
-      );
-  }
-
-  private validateStatementUnlockRulesAreGuaranteed(
-    snapshot: CasePlayabilitySnapshot,
-  ): readonly string[] {
-    return snapshot.statementUnlockRules
-      .filter((rule) => !rule.isGuaranteed || rule.successChance !== 1)
-      .map(
-        (rule) =>
-          `La regla de declaracion "${rule.id}" debe ser garantizada con successChance 1.`,
-      );
-  }
-
-  private validateEveryStatementHasInterviewUnlock(
-    snapshot: CasePlayabilitySnapshot,
-  ): readonly string[] {
-    return snapshot.statements
-      .filter((statement) => !this.hasInterviewUnlockRule(snapshot, statement))
-      .map(
-        (statement) =>
-          `La declaracion de "${statement.speakerName}" debe desbloquearse mediante una entrevista.`,
-      );
-  }
-
-  private validateInterviewActions(
-    snapshot: CasePlayabilitySnapshot,
-  ): readonly string[] {
-    return [
-      ...this.validateInterviewActionsTargetOneSuspect(snapshot),
-      ...this.validateEverySuspectHasInitialInterview(snapshot),
-    ];
-  }
-
-  private validateInterviewActionsTargetOneSuspect(
-    snapshot: CasePlayabilitySnapshot,
-  ): readonly string[] {
-    return this.getInterviewActions(snapshot)
-      .filter(
-        (action) =>
-          this.findInterviewTargetSuspectIds(snapshot, action.id).size !== 1,
-      )
-      .map(
-        (action) =>
-          `La entrevista "${action.title}" debe apuntar a un solo sospechoso mediante reglas de declaracion.`,
-      );
-  }
-
-  private validateEverySuspectHasInitialInterview(
-    snapshot: CasePlayabilitySnapshot,
-  ): readonly string[] {
-    return snapshot.suspects
-      .filter(
-        (suspect) => !this.hasInitialInterviewForSuspect(snapshot, suspect.id),
-      )
-      .map(
-        (suspect) =>
-          `El sospechoso "${suspect.name}" debe tener una entrevista inicial propia.`,
-      );
-  }
-
   private validateActionPrerequisites(
     snapshot: CasePlayabilitySnapshot,
   ): readonly string[] {
@@ -286,6 +405,10 @@ export class CasePlayabilityValidator {
       ...this.validatePrerequisiteTargetCount(prerequisite),
       ...this.validatePrerequisiteTargetReferences(snapshot, prerequisite),
       ...this.validatePrerequisiteSelfReference(prerequisite),
+      ...this.validatePrerequisiteDoesNotDependOnUnlockedContradiction(
+        snapshot,
+        prerequisite,
+      ),
     ];
   }
 
@@ -381,6 +504,222 @@ export class CasePlayabilityValidator {
     return prerequisite.actionId === prerequisite.prerequisiteActionId
       ? [`La accion "${prerequisite.actionId}" no puede depender de si misma.`]
       : [];
+  }
+
+  private validatePrerequisiteDoesNotDependOnUnlockedContradiction(
+    snapshot: CasePlayabilitySnapshot,
+    prerequisite: AdminActionPrerequisiteRecord,
+  ): readonly string[] {
+    if (!prerequisite.prerequisiteContradictionId) {
+      return [];
+    }
+
+    const actionUnlocksContradiction = snapshot.contradictionUnlockRules.some(
+      (rule) =>
+        rule.actionId === prerequisite.actionId &&
+        rule.contradictionId === prerequisite.prerequisiteContradictionId,
+    );
+
+    if (!actionUnlocksContradiction) {
+      return [];
+    }
+
+    const action = this.findAction(snapshot, prerequisite.actionId);
+    const contradiction = this.findContradiction(
+      snapshot,
+      prerequisite.prerequisiteContradictionId,
+    );
+
+    return [
+      `La accion "${action?.title ?? prerequisite.actionId}" no puede depender de la contradiccion "${contradiction?.title ?? prerequisite.prerequisiteContradictionId}" porque esa misma accion la desbloquea.`,
+    ];
+  }
+
+  private validateInvestigationGraphMechanics(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return [
+      ...this.validateStatementUnlockRules(snapshot),
+      ...this.validateInterviewActions(snapshot),
+      ...this.validateInitialInterviewsForSuspects(snapshot),
+    ];
+  }
+
+  private validateStatementUnlockRules(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return snapshot.statementUnlockRules.flatMap((rule) => [
+      ...this.validateStatementUnlockRuleReferences(snapshot, rule),
+      ...this.validateStatementUnlockRuleUsesInterview(snapshot, rule),
+      ...this.validateStatementUnlockRuleIsGuaranteed(snapshot, rule),
+    ]);
+  }
+
+  private validateStatementUnlockRuleReferences(
+    snapshot: CasePlayabilitySnapshot,
+    rule: AdminStatementUnlockRuleRecord,
+  ): readonly string[] {
+    return [
+      ...this.validateStatementUnlockRuleAction(snapshot, rule),
+      ...this.validateStatementUnlockRuleStatement(snapshot, rule),
+    ];
+  }
+
+  private validateStatementUnlockRuleAction(
+    snapshot: CasePlayabilitySnapshot,
+    rule: AdminStatementUnlockRuleRecord,
+  ): readonly string[] {
+    return this.hasAction(snapshot, rule.actionId)
+      ? []
+      : [
+          `La regla de declaracion "${rule.id}" apunta a una accion fuera del caso.`,
+        ];
+  }
+
+  private validateStatementUnlockRuleStatement(
+    snapshot: CasePlayabilitySnapshot,
+    rule: AdminStatementUnlockRuleRecord,
+  ): readonly string[] {
+    return this.hasStatement(snapshot, rule.statementId)
+      ? []
+      : [
+          `La regla de declaracion "${rule.id}" apunta a una declaracion fuera del caso.`,
+        ];
+  }
+
+  private validateStatementUnlockRuleUsesInterview(
+    snapshot: CasePlayabilitySnapshot,
+    rule: AdminStatementUnlockRuleRecord,
+  ): readonly string[] {
+    const action = this.findAction(snapshot, rule.actionId);
+
+    if (!action || action.actionType === 'interview') {
+      return [];
+    }
+
+    return [
+      `La regla de declaracion "${rule.id}" debe desbloquearse desde una accion interview; la accion "${action.title}" usa "${action.actionType}".`,
+    ];
+  }
+
+  private validateStatementUnlockRuleIsGuaranteed(
+    snapshot: CasePlayabilitySnapshot,
+    rule: AdminStatementUnlockRuleRecord,
+  ): readonly string[] {
+    if (rule.isGuaranteed && rule.successChance === 1) {
+      return [];
+    }
+
+    const statement = this.findStatement(snapshot, rule.statementId);
+
+    return [
+      `La regla de declaracion "${statement?.speakerName ?? rule.statementId}" debe ser garantizada con isGuaranteed=true y successChance=1.`,
+    ];
+  }
+
+  private validateInterviewActions(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return snapshot.actions
+      .filter((action) => action.actionType === 'interview')
+      .flatMap((action) => [
+        ...this.validateInterviewActionIsInitial(action),
+        ...this.validateInterviewActionTargetsOneSuspect(snapshot, action),
+      ]);
+  }
+
+  private validateInterviewActionIsInitial(
+    action: AdminInvestigationActionRecord,
+  ): readonly string[] {
+    return action.isInitiallyAvailable
+      ? []
+      : [
+          `La accion "${action.title}" usa actionType="interview", pero interview solo se permite para entrevistas iniciales a sospechosos.`,
+        ];
+  }
+
+  private validateInterviewActionTargetsOneSuspect(
+    snapshot: CasePlayabilitySnapshot,
+    action: AdminInvestigationActionRecord,
+  ): readonly string[] {
+    const suspectIds = this.findStatementSuspectIdsForAction(
+      snapshot,
+      action.id,
+    );
+
+    if (suspectIds.size === 1) {
+      return [];
+    }
+
+    return [
+      `La accion interview "${action.title}" debe desbloquear statements de exactamente un sospechoso.`,
+    ];
+  }
+
+  private validateInitialInterviewsForSuspects(
+    snapshot: CasePlayabilitySnapshot,
+  ): readonly string[] {
+    return snapshot.suspects.flatMap((suspect) =>
+      this.hasGuaranteedInitialInterviewForSuspect(snapshot, suspect.id)
+        ? []
+        : [
+            `El sospechoso "${suspect.name}" necesita una accion inicial interview que desbloquee su declaracion de forma garantizada.`,
+          ],
+    );
+  }
+
+  private hasGuaranteedInitialInterviewForSuspect(
+    snapshot: CasePlayabilitySnapshot,
+    suspectId: string,
+  ): boolean {
+    return snapshot.actions
+      .filter(
+        (action) =>
+          action.actionType === 'interview' && action.isInitiallyAvailable,
+      )
+      .some((action) =>
+        this.hasGuaranteedStatementUnlockForSuspect(
+          snapshot,
+          action.id,
+          suspectId,
+        ),
+      );
+  }
+
+  private hasGuaranteedStatementUnlockForSuspect(
+    snapshot: CasePlayabilitySnapshot,
+    actionId: string,
+    suspectId: string,
+  ): boolean {
+    return snapshot.statementUnlockRules.some((rule) => {
+      const statement = this.findStatement(snapshot, rule.statementId);
+
+      return (
+        rule.actionId === actionId &&
+        rule.isGuaranteed &&
+        rule.successChance === 1 &&
+        statement?.suspectId === suspectId
+      );
+    });
+  }
+
+  private findStatementSuspectIdsForAction(
+    snapshot: CasePlayabilitySnapshot,
+    actionId: string,
+  ): ReadonlySet<string> {
+    const suspectIds = new Set<string>();
+
+    snapshot.statementUnlockRules
+      .filter((rule) => rule.actionId === actionId)
+      .forEach((rule) => {
+        const statement = this.findStatement(snapshot, rule.statementId);
+
+        if (statement?.suspectId) {
+          suspectIds.add(statement.suspectId);
+        }
+      });
+
+    return suspectIds;
   }
 
   private validateNonInitialActionsHavePrerequisites(
@@ -789,20 +1128,18 @@ export class CasePlayabilityValidator {
     return snapshot.actions.filter((action) => action.isInitiallyAvailable);
   }
 
-  private getInterviewActions(
-    snapshot: CasePlayabilitySnapshot,
-  ): readonly AdminInvestigationActionRecord[] {
-    return snapshot.actions.filter(
-      (action) => action.actionType === 'interview',
-    );
-  }
-
   private getMandatoryRequirements(
     snapshot: CasePlayabilitySnapshot,
   ): readonly AdminSolveRequirementRecord[] {
     return snapshot.requirements.filter(
       (requirement) => requirement.isMandatory,
     );
+  }
+
+  private readCaseDifficulty(difficulty: string): AdminCaseDifficulty {
+    return ADMIN_CASE_DIFFICULTIES.includes(difficulty as AdminCaseDifficulty)
+      ? (difficulty as AdminCaseDifficulty)
+      : 'medium';
   }
 
   private hasAction(
@@ -812,35 +1149,11 @@ export class CasePlayabilityValidator {
     return snapshot.actions.some((action) => action.id === actionId);
   }
 
-  private hasInterviewUnlockRule(
-    snapshot: CasePlayabilitySnapshot,
-    statement: AdminStatementRecord,
-  ): boolean {
-    return snapshot.statementUnlockRules.some(
-      (rule) =>
-        rule.statementId === statement.id &&
-        this.isInterviewAction(snapshot, rule.actionId),
-    );
-  }
-
-  private hasInitialInterviewForSuspect(
-    snapshot: CasePlayabilitySnapshot,
-    suspectId: string,
-  ): boolean {
-    return this.getInterviewActions(snapshot)
-      .filter((action) => action.isInitiallyAvailable)
-      .some(
-        (action) =>
-          this.findOnlyInterviewTargetSuspectId(snapshot, action.id) ===
-          suspectId,
-      );
-  }
-
-  private isInterviewAction(
+  private findAction(
     snapshot: CasePlayabilitySnapshot,
     actionId: string,
-  ): boolean {
-    return this.findAction(snapshot, actionId)?.actionType === 'interview';
+  ): AdminInvestigationActionRecord | undefined {
+    return snapshot.actions.find((action) => action.id === actionId);
   }
 
   private hasSuspect(
@@ -857,6 +1170,13 @@ export class CasePlayabilityValidator {
     return snapshot.statements.some(
       (statement) => statement.id === statementId,
     );
+  }
+
+  private findStatement(
+    snapshot: CasePlayabilitySnapshot,
+    statementId: string,
+  ): AdminStatementRecord | undefined {
+    return snapshot.statements.find((statement) => statement.id === statementId);
   }
 
   private hasEvidence(
@@ -882,42 +1202,5 @@ export class CasePlayabilityValidator {
     return snapshot.contradictions.find(
       (contradiction) => contradiction.id === contradictionId,
     );
-  }
-
-  private findAction(
-    snapshot: CasePlayabilitySnapshot,
-    actionId: string,
-  ): AdminInvestigationActionRecord | undefined {
-    return snapshot.actions.find((action) => action.id === actionId);
-  }
-
-  private findStatement(
-    snapshot: CasePlayabilitySnapshot,
-    statementId: string,
-  ): AdminStatementRecord | undefined {
-    return snapshot.statements.find(
-      (statement) => statement.id === statementId,
-    );
-  }
-
-  private findInterviewTargetSuspectIds(
-    snapshot: CasePlayabilitySnapshot,
-    actionId: string,
-  ): ReadonlySet<string> {
-    const suspectIds = snapshot.statementUnlockRules
-      .filter((rule) => rule.actionId === actionId)
-      .map((rule) => this.findStatement(snapshot, rule.statementId)?.suspectId)
-      .filter((suspectId): suspectId is string => Boolean(suspectId));
-
-    return new Set(suspectIds);
-  }
-
-  private findOnlyInterviewTargetSuspectId(
-    snapshot: CasePlayabilitySnapshot,
-    actionId: string,
-  ): string | undefined {
-    const suspectIds = this.findInterviewTargetSuspectIds(snapshot, actionId);
-
-    return suspectIds.size === 1 ? [...suspectIds][0] : undefined;
   }
 }
