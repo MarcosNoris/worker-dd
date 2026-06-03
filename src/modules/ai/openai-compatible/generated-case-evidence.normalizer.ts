@@ -5,13 +5,7 @@ import {
   ADMIN_PROOF_ROLES,
   AdminProofRole,
 } from '../../cases/constants/admin-case.constants';
-import {
-  readArray,
-  readBoolean,
-  readEnumValue,
-  readNumber,
-  readString,
-} from '../../../shared/utils/value.util';
+import { readString } from '../../../shared/utils/value.util';
 import {
   GenerateCaseEvidencesInput,
   GeneratedCaseEvidence,
@@ -41,23 +35,19 @@ export class GeneratedCaseEvidenceNormalizer {
   createContentFromPayload(
     payload: GeneratedCaseEvidencesPayload,
     input: GenerateCaseEvidencesInput,
-    fallback: GeneratedCaseEvidencesContent,
   ): GeneratedCaseEvidencesContent {
     const selectedCulpritSuspectId = this.selectCulpritSuspectId(
       payload.selectedCulpritSuspectId,
       input,
-      fallback,
     );
 
     return {
       evidences: this.createEvidences(payload.evidences, {
-        fallback,
         input,
         selectedCulpritSuspectId,
       }),
       selectedCulpritSuspectId,
       solution: this.createOptionalSolution(payload.solution, {
-        fallback,
         input,
         selectedCulpritSuspectId,
       }),
@@ -68,15 +58,12 @@ export class GeneratedCaseEvidenceNormalizer {
     value: unknown,
     context: NormalizationContext,
   ): readonly GeneratedCaseEvidence[] {
-    const evidences = readArray(value)
-      .slice(0, context.input.evidenceCount)
-      .map((evidence, evidenceIndex) =>
+    const evidences = this.readPayloadEvidences(value, context.input).map(
+      (evidence, evidenceIndex) =>
         this.createEvidence(evidence, evidenceIndex, context),
-      );
-
-    return this.normalizeEvidenceProofMatrix(
-      this.withFallbackEvidences(evidences, context),
     );
+
+    return this.normalizeEvidenceProofMatrix(evidences);
   }
 
   private createEvidence(
@@ -85,45 +72,44 @@ export class GeneratedCaseEvidenceNormalizer {
     context: NormalizationContext,
   ): GeneratedCaseEvidence {
     const payload = this.readPayload(value);
-    const fallback = this.getFallbackEvidence(evidenceIndex, context);
-    const importance = readEnumValue(
-      payload.importance,
-      ADMIN_EVIDENCE_IMPORTANCES,
-      fallback.importance,
-    );
+    const importance = this.readImportance(payload.importance, evidenceIndex);
     const isDecoy =
       importance === 'misleading' ||
-      readBoolean(payload.isDecoy, fallback.isDecoy);
+      this.readBoolean(payload.isDecoy, {
+        evidenceIndex,
+        fieldName: 'isDecoy',
+      });
 
     return {
       description: this.readText(
         payload.description,
-        fallback.description,
+        'description',
+        evidenceIndex,
         MAX_DESCRIPTION_LENGTH,
       ),
       discoveryHint: this.readOptionalText(
         payload.discoveryHint,
-        fallback.discoveryHint,
         MAX_HINT_LENGTH,
       ),
       importance,
       isDecoy,
-      isInitiallyVisible: readBoolean(
-        payload.isInitiallyVisible,
-        fallback.isInitiallyVisible,
-      ),
-      location: this.readOptionalText(
-        payload.location,
-        fallback.location,
-        MAX_LOCATION_LENGTH,
-      ),
-      metadata: this.createMetadata(payload.metadata, fallback.metadata, {
+      isInitiallyVisible: this.readBoolean(payload.isInitiallyVisible, {
+        evidenceIndex,
+        fieldName: 'isInitiallyVisible',
+      }),
+      location: this.readOptionalText(payload.location, MAX_LOCATION_LENGTH),
+      metadata: this.createMetadata(payload.metadata, {
         evidenceIndex,
         isDecoy,
       }),
-      title: this.readText(payload.title, fallback.title, MAX_TITLE_LENGTH),
-      type: readEnumValue(payload.type, ADMIN_EVIDENCE_TYPES, fallback.type),
-      weight: this.readWeight(payload.weight, fallback.weight),
+      title: this.readText(
+        payload.title,
+        'title',
+        evidenceIndex,
+        MAX_TITLE_LENGTH,
+      ),
+      type: this.readType(payload.type, evidenceIndex),
+      weight: this.readWeight(payload.weight, evidenceIndex),
     };
   }
 
@@ -136,32 +122,31 @@ export class GeneratedCaseEvidenceNormalizer {
     }
 
     const payload = this.readPayload(value);
-    const fallback = context.fallback.solution;
 
     return {
       culpritSuspectId: context.selectedCulpritSuspectId,
       fullExplanation: this.readText(
         payload.fullExplanation,
-        fallback?.fullExplanation ??
-          'La solucion conecta evidencia, motivo y oportunidad.',
+        'solution.fullExplanation',
+        undefined,
         MAX_DESCRIPTION_LENGTH,
       ),
       methodSummary: this.readText(
         payload.methodSummary,
-        fallback?.methodSummary ??
-          'El metodo se deduce desde las evidencias criticas.',
+        'solution.methodSummary',
+        undefined,
         MAX_DESCRIPTION_LENGTH,
       ),
       motiveSummary: this.readText(
         payload.motiveSummary,
-        fallback?.motiveSummary ??
-          'El motivo se sostiene por el contexto del caso.',
+        'solution.motiveSummary',
+        undefined,
         MAX_DESCRIPTION_LENGTH,
       ),
       opportunitySummary: this.readText(
         payload.opportunitySummary,
-        fallback?.opportunitySummary ??
-          'La oportunidad surge de acceso y ventana temporal.',
+        'solution.opportunitySummary',
+        undefined,
         MAX_DESCRIPTION_LENGTH,
       ),
     };
@@ -170,7 +155,6 @@ export class GeneratedCaseEvidenceNormalizer {
   private selectCulpritSuspectId(
     value: unknown,
     input: GenerateCaseEvidencesInput,
-    fallback: GeneratedCaseEvidencesContent,
   ): string {
     if (this.isKnownSuspect(input, input.culpritSuspectId)) {
       return input.culpritSuspectId;
@@ -182,26 +166,9 @@ export class GeneratedCaseEvidenceNormalizer {
       return generatedSuspectId;
     }
 
-    if (this.isKnownSuspect(input, fallback.selectedCulpritSuspectId)) {
-      return fallback.selectedCulpritSuspectId;
-    }
-
-    return this.findOldestSuspectId(input);
-  }
-
-  private withFallbackEvidences(
-    evidences: readonly GeneratedCaseEvidence[],
-    context: NormalizationContext,
-  ): readonly GeneratedCaseEvidence[] {
-    const completedEvidences = [...evidences];
-
-    while (completedEvidences.length < context.input.evidenceCount) {
-      completedEvidences.push(
-        this.getFallbackEvidence(completedEvidences.length, context),
-      );
-    }
-
-    return completedEvidences.slice(0, context.input.evidenceCount);
+    throw new Error(
+      'La IA devolvio un selectedCulpritSuspectId que no pertenece al caso.',
+    );
   }
 
   private normalizeEvidenceProofMatrix(
@@ -340,47 +307,11 @@ export class GeneratedCaseEvidenceNormalizer {
     return evidence.isDecoy ? 'false_alibi' : 'support';
   }
 
-  private getFallbackEvidence(
-    evidenceIndex: number,
-    context: NormalizationContext,
-  ): GeneratedCaseEvidence {
-    return (
-      context.fallback.evidences[evidenceIndex] ??
-      this.createGenericFallbackEvidence(evidenceIndex, context)
-    );
-  }
-
-  private createGenericFallbackEvidence(
-    evidenceIndex: number,
-    context: NormalizationContext,
-  ): GeneratedCaseEvidence {
-    return {
-      description:
-        'Registro generado para sostener una linea de investigacion del caso.',
-      importance: evidenceIndex === 0 ? 'critical' : 'supporting',
-      isDecoy: false,
-      isInitiallyVisible: evidenceIndex === 0,
-      metadata: {
-        mandatoryCandidate: evidenceIndex < CORE_EVIDENCE_PROOF_ROLES.length,
-        narrativePurpose: 'Completar la estructura minima de evidencias.',
-        primaryProofRole: this.resolveFallbackProofRole(evidenceIndex),
-        proofRationale:
-          'Evidencia de respaldo generada para conservar la matriz probatoria minima.',
-        proofRoles: [this.resolveFallbackProofRole(evidenceIndex)],
-        relatedSuspectIds: [context.selectedCulpritSuspectId],
-      },
-      title: `Evidencia generada ${evidenceIndex + 1}`,
-      type: 'document',
-      weight: evidenceIndex === 0 ? 10 : 5,
-    };
-  }
-
   private createMetadata(
     value: unknown,
-    fallback: Record<string, unknown>,
     context: EvidenceMetadataContext,
   ): Record<string, unknown> {
-    const metadata = this.isRecord(value) ? value : fallback;
+    const metadata = this.isRecord(value) ? value : {};
     const primaryProofRole = this.readPrimaryProofRole(metadata, context);
 
     return {
@@ -461,23 +392,110 @@ export class GeneratedCaseEvidenceNormalizer {
 
   private readText(
     value: unknown,
-    fallback: string,
+    fieldName: string,
+    evidenceIndex: number | undefined,
     maxLength: number,
   ): string {
-    return readString(value, fallback).slice(0, maxLength);
+    if (typeof value !== 'string') {
+      throw this.createInvalidEvidenceError(fieldName, evidenceIndex);
+    }
+
+    const text = value.trim();
+
+    if (text.length === 0) {
+      throw this.createInvalidEvidenceError(fieldName, evidenceIndex);
+    }
+
+    return text.slice(0, maxLength);
   }
 
   private readOptionalText(
     value: unknown,
-    fallback: string | undefined,
     maxLength: number,
   ): string | undefined {
-    const text = readString(value, fallback ?? '');
+    const text = readString(value, '');
     return text ? text.slice(0, maxLength) : undefined;
   }
 
-  private readWeight(value: unknown, fallback: number): number {
-    return Math.max(0, Math.round(readNumber(value, fallback)));
+  private readPayload(value: unknown): Record<string, unknown> {
+    if (!this.isRecord(value)) {
+      throw new Error('La IA devolvio una evidencia invalida.');
+    }
+
+    return value;
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  private readPayloadEvidences(
+    value: unknown,
+    input: GenerateCaseEvidencesInput,
+  ): readonly unknown[] {
+    if (!Array.isArray(value)) {
+      throw new Error('La IA no devolvio un arreglo evidences valido.');
+    }
+
+    if (value.length !== input.evidenceCount) {
+      throw new Error(
+        `La IA devolvio ${value.length} evidencias; se esperaban ${input.evidenceCount}.`,
+      );
+    }
+
+    return value;
+  }
+
+  private readImportance(
+    value: unknown,
+    evidenceIndex: number,
+  ): GeneratedCaseEvidence['importance'] {
+    if (
+      typeof value === 'string' &&
+      ADMIN_EVIDENCE_IMPORTANCES.includes(
+        value as GeneratedCaseEvidence['importance'],
+      )
+    ) {
+      return value as GeneratedCaseEvidence['importance'];
+    }
+
+    throw this.createInvalidEvidenceError('importance', evidenceIndex);
+  }
+
+  private readType(
+    value: unknown,
+    evidenceIndex: number,
+  ): GeneratedCaseEvidence['type'] {
+    if (
+      typeof value === 'string' &&
+      ADMIN_EVIDENCE_TYPES.includes(value as GeneratedCaseEvidence['type'])
+    ) {
+      return value as GeneratedCaseEvidence['type'];
+    }
+
+    throw this.createInvalidEvidenceError('type', evidenceIndex);
+  }
+
+  private readBoolean(
+    value: unknown,
+    context: RequiredEvidenceFieldContext,
+  ): boolean {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+
+    throw this.createInvalidEvidenceError(
+      context.fieldName,
+      context.evidenceIndex,
+    );
+  }
+
+  private readWeight(value: unknown, evidenceIndex: number): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw this.createInvalidEvidenceError('weight', evidenceIndex);
+    }
+
+    return Math.max(0, Math.round(value));
   }
 
   private isKnownSuspect(
@@ -490,25 +508,22 @@ export class GeneratedCaseEvidenceNormalizer {
     );
   }
 
-  private findOldestSuspectId(input: GenerateCaseEvidencesInput): string {
-    return (
-      [...input.suspects].sort((left, right) =>
-        left.createdAt.localeCompare(right.createdAt),
-      )[0]?.id ?? 'unknown-suspect'
+  private createInvalidEvidenceError(
+    fieldName: string,
+    evidenceIndex: number | undefined,
+  ): Error {
+    const evidenceLabel =
+      evidenceIndex === undefined
+        ? 'la respuesta'
+        : `evidences[${evidenceIndex}]`;
+
+    return new Error(
+      `La IA no devolvio un valor valido para ${evidenceLabel}.${fieldName}.`,
     );
-  }
-
-  private readPayload(value: unknown): Record<string, unknown> {
-    return this.isRecord(value) ? value : {};
-  }
-
-  private isRecord(value: unknown): value is Record<string, unknown> {
-    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
   }
 }
 
 interface NormalizationContext {
-  readonly fallback: GeneratedCaseEvidencesContent;
   readonly input: GenerateCaseEvidencesInput;
   readonly selectedCulpritSuspectId: string;
 }
@@ -516,4 +531,9 @@ interface NormalizationContext {
 interface EvidenceMetadataContext {
   readonly evidenceIndex: number;
   readonly isDecoy: boolean;
+}
+
+interface RequiredEvidenceFieldContext {
+  readonly evidenceIndex: number;
+  readonly fieldName: string;
 }

@@ -378,14 +378,7 @@ export class ExternalAiContentProvider implements AiContentProvider {
         }),
         'evidences',
       );
-    return this.evidenceNormalizer.createContentFromPayload(
-      payload,
-      input,
-      {
-        evidences: [],
-        selectedCulpritSuspectId: input.culpritSuspectId ?? '',
-      },
-    );
+    return this.evidenceNormalizer.createContentFromPayload(payload, input);
   }
 
   private async generateCaseSuspectsWithRoute(

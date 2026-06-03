@@ -29,7 +29,7 @@ Genera:
 
 ## Generacion completa de casos sin fallback local
 
-El workflow completo usado por `CasesModule` para crear casos estructurados no usa `LocalAiContentProvider` como rescate. Los pasos `generate_case_base`, `generate_suspects`, `generate_evidences`, `generate_statements`, `generate_contradictions`, `generate_solution`, `generate_solve_requirements` y `generate_investigation_graph` usan proveedores externos con retries. Si todos fallan, el run guarda `lastError`, queda `failed` y la API devuelve el estado fallido del run.
+El workflow completo usado por `CasesModule` para crear casos estructurados no usa `LocalAiContentProvider` como rescate. Los pasos `generate_case_base`, `generate_suspects`, `generate_evidences`, `generate_statements`, `generate_contradictions`, `generate_solution`, `generate_solve_requirements` y `generate_investigation_graph` usan proveedores externos con retries. Si todos fallan o devuelven payloads incompletos, el run guarda `lastError`, queda `failed` y la API devuelve el estado fallido del run.
 
 El fallback local puede seguir existiendo para flujos legacy de demo, avances narrativos o veredictos que no pertenecen a la generacion completa de casos.
 
@@ -235,7 +235,7 @@ Salida:
 }
 ```
 
-El proveedor externo debe devolver JSON estricto. El normalizador recorta al numero solicitado, completa faltantes con estructura generica del backend si el payload llega incompleto, valida que el culpable pertenezca a los sospechosos recibidos y fuerza `solution.culpritSuspectId` al culpable seleccionado. Este flujo no llama a `LocalAiContentProvider`; si los proveedores externos fallan, lanza `ServiceUnavailableException`.
+El proveedor externo debe devolver JSON estricto con exactamente `evidenceCount` evidencias completas. El normalizador valida que `selectedCulpritSuspectId` pertenezca a los sospechosos recibidos y que cada evidencia incluya `title`, `description`, `type`, `importance`, `weight`, `isDecoy` e `isInitiallyVisible`. Si `generateSolution` esta activo, tambien exige todos los textos de `solution`. Este flujo no llama a `LocalAiContentProvider`, no inventa evidencias genericas y no elige un culpable local; si los proveedores externos fallan o devuelven payloads incompletos, lanza `ServiceUnavailableException`.
 
 ### `AiService.generateCaseStatements(input)`
 
@@ -732,7 +732,7 @@ Antes de `generateAdminCaseBase` y `generateCaseSuspects`, `AiService` consulta 
 
 `LocalAiContentProvider` queda como fallback final solo para los flujos que lo admiten, como el caso demo legacy, avances narrativos y veredictos. La generacion administrativa completa de casos no lo usa como rescate.
 
-Los flujos administrativos estrictos (`generateAdminCaseBase`, `generateCaseSuspects`, `generateCaseStatements`, `generateCaseContradictions`, `generateCaseSolution`, `generateCaseSolveRequirements`, `generateCaseInvestigationGraph` y `generateDetectiveProfile`) no persisten contenido si todos los proveedores externos fallan o devuelven payloads invalidos.
+Los flujos administrativos estrictos (`generateAdminCaseBase`, `generateCaseSuspects`, `generateCaseEvidences`, `generateCaseStatements`, `generateCaseContradictions`, `generateCaseSolution`, `generateCaseSolveRequirements`, `generateCaseInvestigationGraph` y `generateDetectiveProfile`) no persisten contenido si todos los proveedores externos fallan o devuelven payloads invalidos.
 
 Antes de normalizar una respuesta externa, el parser extrae el JSON desde texto extra o fences de Markdown. En los flujos cuyo contrato es un objeto con un array principal (`evidences`, `suspects`, `statements`, `contradictions` o `solveRequirements`), si el proveedor devuelve un array raiz valido, el modulo lo adapta al objeto esperado y mantiene las validaciones de negocio posteriores. No se inventan campos faltantes ni ids: cualquier item incompleto o ajeno al caso sigue fallando y rota al siguiente proveedor.
 

@@ -33,8 +33,7 @@ type CasesServiceStub = Record<
   | 'generateCaseSolveRequirements'
   | 'generateCaseStatements'
   | 'generateCaseSuspects'
-  | 'getAdminCaseState'
-  | 'publishCase',
+  | 'getAdminCaseState',
   jest.Mock
 >;
 
@@ -216,10 +215,6 @@ describe('CaseAiGenerationWorkflowService', () => {
         },
         status: 'draft',
       })),
-      publishCase: jest.fn(async () => ({
-        data: createCase({ status: 'playable' }),
-        success: true,
-      })),
     };
     service = new CaseAiGenerationWorkflowService(
       repository as unknown as CasesRepository,
@@ -257,7 +252,6 @@ describe('CaseAiGenerationWorkflowService', () => {
       expect.objectContaining({ evidenceCount: 5 }),
     );
     expect(response.data.run.status).toBe('completed');
-    expect(casesService.publishCase).toHaveBeenCalledWith('case-id');
     expect(response.data.run.culpritSuspectId).toBe('suspect-id');
     expect(response.data.run.attemptsByStep.generate_investigation_graph).toBe(
       1,

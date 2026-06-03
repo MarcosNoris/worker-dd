@@ -478,6 +478,10 @@ describe('ExternalAiContentProvider', () => {
               proves: ['identity', 'opportunity'],
             },
           },
+          createGeneratedEvidencePayload('Contrato alterado', {
+            primaryProofRole: 'motive',
+            proofRoles: ['motive'],
+          }),
         ],
         solution: {
           culpritSuspectId: '22222222-2222-4222-8222-222222222222',
@@ -563,7 +567,9 @@ describe('ExternalAiContentProvider', () => {
       createGenerateCaseEvidencesInput({ evidenceCount: 6 }),
     );
 
-    expect(result.content.evidences.map((evidence) => evidence.metadata)).toEqual([
+    expect(
+      result.content.evidences.map((evidence) => evidence.metadata),
+    ).toEqual([
       expect.objectContaining({
         mandatoryCandidate: true,
         primaryProofRole: 'opportunity',
@@ -603,11 +609,18 @@ describe('ExternalAiContentProvider', () => {
     ]);
   });
 
-  it('falls back to a known suspect when generated evidences use an invalid culprit id', async () => {
+  it('throws when generated evidences use an invalid culprit id', async () => {
     const client = createClientMock([
       JSON.stringify({
         selectedCulpritSuspectId: 'invalid-suspect-id',
-        evidences: [],
+        evidences: [
+          createGeneratedEvidencePayload('Registro de camaras', {
+            primaryProofRole: 'identity',
+          }),
+          createGeneratedEvidencePayload('Contrato alterado', {
+            primaryProofRole: 'motive',
+          }),
+        ],
         solution: {
           culpritSuspectId: 'invalid-suspect-id',
           motiveSummary: 'Motivo generado.',
@@ -619,17 +632,29 @@ describe('ExternalAiContentProvider', () => {
     ]);
     const provider = createProvider([nvidiaRoute], client);
 
-    const result = await provider.generateCaseEvidences(
-      createGenerateCaseEvidencesInput({ generateSolution: true }),
-    );
+    await expect(
+      provider.generateCaseEvidences(
+        createGenerateCaseEvidencesInput({ generateSolution: true }),
+      ),
+    ).rejects.toThrow('selectedCulpritSuspectId que no pertenece al caso');
+  });
 
-    expect(result.usedFallback).toBe(false);
-    expect(result.content.selectedCulpritSuspectId).toBe(
-      '22222222-2222-4222-8222-222222222222',
-    );
-    expect(result.content.solution?.culpritSuspectId).toBe(
-      '22222222-2222-4222-8222-222222222222',
-    );
+  it('throws when generated evidences do not match the requested count', async () => {
+    const client = createClientMock([
+      JSON.stringify({
+        selectedCulpritSuspectId: '22222222-2222-4222-8222-222222222222',
+        evidences: [
+          createGeneratedEvidencePayload('Registro de camaras', {
+            primaryProofRole: 'identity',
+          }),
+        ],
+      }),
+    ]);
+    const provider = createProvider([nvidiaRoute], client);
+
+    await expect(
+      provider.generateCaseEvidences(createGenerateCaseEvidencesInput()),
+    ).rejects.toThrow(ServiceUnavailableException);
   });
 
   it('rotates after invalid evidence JSON and uses the next provider', async () => {
@@ -648,6 +673,9 @@ describe('ExternalAiContentProvider', () => {
             isInitiallyVisible: true,
             metadata: {},
           },
+          createGeneratedEvidencePayload('Bitacora secundaria', {
+            primaryProofRole: 'motive',
+          }),
         ],
       }),
     ]);

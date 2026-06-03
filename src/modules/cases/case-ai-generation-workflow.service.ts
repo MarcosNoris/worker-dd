@@ -329,8 +329,6 @@ export class CaseAiGenerationWorkflowService {
     const finishedAt = new Date().toISOString();
 
     if (validation.canPublish) {
-      await this.casesService.publishCase(this.requireCaseId(run));
-
       return this.casesRepository.updateCaseAiGenerationRun(run.id, {
         currentStep: 'validate_playability',
         finishedAt,
